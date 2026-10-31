@@ -338,21 +338,24 @@ final class CanvasStore: ObservableObject {
 
     private func drawingPoint(_ point: CGPoint, from overlay: UIView, in view: PKCanvasView) -> CGPoint? {
         guard let viewport = viewportPoint(point, from: overlay, in: view) else { return nil }
-        let z = max(view.zoomScale, 0.0001)
-        return CGPoint(x: (view.contentOffset.x + viewport.x) / z,
-                       y: (view.contentOffset.y + viewport.y) / z)
+        return CanvasGeometry.drawingPoint(viewport: viewport,
+                                           offset: view.contentOffset,
+                                           scale: view.zoomScale)
     }
 
     private func zoomPreservingAnchor(_ requestedScale: CGFloat, at viewport: CGPoint, in view: PKCanvasView) {
         let originalZoom = max(view.zoomScale, 0.0001)
-        let anchor = CGPoint(x: (view.contentOffset.x + viewport.x) / originalZoom,
-                             y: (view.contentOffset.y + viewport.y) / originalZoom)
+        let originalOffset = view.contentOffset
         let newScale = min(view.maximumZoomScale, max(view.minimumZoomScale, requestedScale))
         guard abs(newScale - originalZoom) > 0.000001 else { return }
         view.setZoomScale(newScale, animated: false)
-        let actual = view.zoomScale
-        view.setContentOffset(CGPoint(x: anchor.x * actual - viewport.x,
-                                      y: anchor.y * actual - viewport.y), animated: false)
+        let nextOffset = CanvasGeometry.offsetPreservingAnchor(
+            originalOffset: originalOffset,
+            originalZoom: originalZoom,
+            targetZoom: view.zoomScale,
+            viewportAnchor: viewport
+        )
+        view.setContentOffset(nextOffset, animated: false)
         refreshViewport()
     }
 
@@ -500,7 +503,7 @@ final class CanvasStore: ObservableObject {
                        y: (view.contentOffset.y + view.bounds.height / 2) / max(view.zoomScale, 0.01))
     }
     func screenPoint(for area: CanvasArea) -> CGPoint {
-        CGPoint(x: CGFloat(area.x) * zoom - offset.x, y: CGFloat(area.y) * zoom - offset.y)
+        CanvasGeometry.viewportPoint(drawing: CGPoint(x: area.x, y: area.y), offset: offset, scale: zoom)
     }
     func zoomToOverview() {
         guard let view = canvas else { return }
