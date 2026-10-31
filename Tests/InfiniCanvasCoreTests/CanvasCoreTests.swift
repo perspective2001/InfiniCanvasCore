@@ -147,9 +147,12 @@ final class CanvasCoreTests: XCTestCase {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 0.25
         let renderer = UIGraphicsImageRenderer(size: window.bounds.size, format: format)
-        let snapshot = renderer.image { _ in
-            let drawn = window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
-            print("APP_TEST drawHierarchy=\(drawn)")
+        let snapshot = renderer.image { context in
+            // drawHierarchy returns false in SwiftPM's headless test runner
+            // even when the scene and canvas are laid out. Render the layer
+            // tree instead, then explicitly inspect the pixels.
+            context.cgContext.scaleBy(x: 1, y: 1)
+            window.layer.render(in: context.cgContext)
         }
         guard let cgImage = snapshot.cgImage, let data = cgImage.dataProvider?.data else {
             XCTFail("App root did not produce a screenshot"); return
@@ -158,20 +161,16 @@ final class CanvasCoreTests: XCTestCase {
         let bytesPerPixel = max(1, cgImage.bitsPerPixel / 8)
         let bpr = cgImage.bytesPerRow
         let count = min(cgImage.height, 45)
-        var varied = false
-        for y in 0..<count where !varied {
+        var colors = Set<String>()
+        for y in 0..<count {
             for x in stride(from: 0, to: cgImage.width, by: 7) {
                 let k = y * bpr + x * bytesPerPixel
                 if bytesPerPixel >= 3 {
-                    let c0 = Int(bytes[k]); let c1 = Int(bytes[k+1]); let c2 = Int(bytes[k+2])
-                    if max(c0,c1,c2) - min(c0,c1,c2) > 14 ||
-                       (c0 < 160 && c1 < 160 && c2 < 160) {
-                        varied = true; break
-                    }
+                    colors.insert("\(bytes[k]) \(bytes[k+1]) \(bytes[k+2])")
                 }
             }
         }
-        print("APP_TEST upperControlsNonblank=\(varied)")
+        print("APP_TEST topPixelsDistinctColors=\(colors.count)")
         // Emit a very small thumbnail only for launch regression diagnosis.
         let thumb = UIGraphicsImageRenderer(size: CGSize(width: 160, height: 120)).image { _ in
             snapshot.draw(in: CGRect(x: 0, y: 0, width: 160, height: 120))
@@ -179,7 +178,7 @@ final class CanvasCoreTests: XCTestCase {
         if let data = thumb.pngData() {
             print("APP_TEST_IMAGE_BASE64:" + data.base64EncodedString())
         }
-        XCTAssertTrue(varied, "App upper controls appear blank/white in captured root screen")
+        XCTAssertGreaterThan(colors.count, 4, "Full app root must draw visible toolbar content in its top region")
         window.isHidden = true
     }
 
