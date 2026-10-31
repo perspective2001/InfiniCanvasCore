@@ -954,7 +954,15 @@ private struct FingerDoubleTapTarget: UIViewRepresentable {
         recognizer.numberOfTouchesRequired = 1
         recognizer.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
         recognizer.cancelsTouchesInView = true
+        let singleTap = UITapGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.didDoubleTap(_:))
+        )
+        singleTap.numberOfTapsRequired = 1
+        singleTap.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        singleTap.require(toFail: recognizer)
         view.addGestureRecognizer(recognizer)
+        view.addGestureRecognizer(singleTap)
         return view
     }
 
