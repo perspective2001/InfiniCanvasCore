@@ -600,6 +600,22 @@ struct ContentView: View {
         .modifier(CanvasGlassSurface(cornerRadius: 20))
     }
 
+    private var activeSize: CGFloat {
+        store.tool == .eraser ? store.eraserWidth : store.strokeWidth
+    }
+    private var activeSizeLimits: ClosedRange<CGFloat> {
+        if store.tool == .eraser { return 3...60 }
+        return 0.4...(store.mode == .art ? 80 : 18)
+    }
+    private func applySize(_ requested: CGFloat) {
+        let range = activeSizeLimits
+        let value = min(range.upperBound, max(range.lowerBound, requested))
+        if store.tool == .eraser { store.eraserWidth = value }
+        else { store.strokeWidth = value }
+    }
+    // Effective screen size is specified in *points*, not device pixels.
+    private var visibleSize: CGFloat { activeSize * store.zoom }
+
     // Swipe upward from the compact width icon to reveal an expanding, directly
     // draggable vertical width slider. The same gesture can immediately change
     // pen width without lifting the Pencil. A tap is also supported.
@@ -612,7 +628,7 @@ struct ContentView: View {
             HStack(spacing: 7) {
                 Image(systemName: "lineweight")
                     .font(.system(size: 18, weight: .medium))
-                Text(String(format: "%.1f", Double(store.strokeWidth)))
+                Text(String(format: "%.1f", Double(activeSize)))
                     .font(.caption.monospacedDigit().weight(.semibold))
                     .frame(minWidth: 35, alignment: .trailing)
             }
@@ -620,23 +636,22 @@ struct ContentView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.bordered)
-        .accessibilityLabel("Pen size: \(String(format: "%.1f", Double(store.strokeWidth)))")
+        .accessibilityLabel("Tool width \(String(format: "%.1f", Double(activeSize))) points, \(String(format: "%.1f", Double(visibleSize))) at current zoom")
         .accessibilityHint("Swipe up to expand size slider, keep dragging to resize, or tap")
         .highPriorityGesture(
             DragGesture(minimumDistance: 7)
                 .onChanged { value in
-                    if value.translation.height < -12 {
-                        if widthDragStart == nil {
-                            widthDragStart = store.strokeWidth
-                            withAnimation(.spring(response: 0.34, dampingFraction: 0.77)) {
-                                widthPanelExpanded = true
-                            }
+                    if widthDragStart == nil {
+                        guard value.translation.height < -12 else { return }
+                        widthDragStart = activeSize
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
+                            widthPanelExpanded = true
                         }
-                        let baseline = widthDragStart ?? store.strokeWidth
-                        let maxSize: CGFloat = store.mode == .art ? 80 : 18
-                        store.strokeWidth = min(maxSize, max(0.4,
-                            baseline + (-value.translation.height - 12) * 0.075))
                     }
+                    // Once expanded, continuing downward lowers the size,
+                    // including below the trigger's bottom edge.
+                    let baseline = widthDragStart ?? activeSize
+                    applySize(baseline + (-value.translation.height - 12) * 0.075)
                 }
                 .onEnded { value in
                     widthDragStart = nil
@@ -666,10 +681,38 @@ struct ContentView: View {
                 .accessibilityLabel("Swipe down to close pen size")
             HStack(spacing: 8) {
                 Image(systemName: "lineweight").foregroundStyle(teal)
-                Text(String(format: "%.1f pt", Double(store.strokeWidth)))
+                Text(String(format: "%.1f pt", Double(activeSize)))
                     .font(.system(size: 16, weight: .semibold, design: .rounded).monospacedDigit())
             }
             .frame(maxWidth: .infinity)
+            VStack(spacing: 2) {
+                Text(String(format: "At %.0f%% zoom · %.1f pt on screen",
+                            Double(store.zoom * 100), Double(visibleSize)))
+                    .font(.caption.monospacedDigit().weight(.medium))
+                Text("Actual stroke shape also responds to Pencil pressure")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                ZStack {
+                    Circle().strokeBorder(.primary.opacity(0.10), lineWidth: 1)
+                        .frame(width: 94, height: 94)
+                    if store.tool == .eraser {
+                        Circle().strokeBorder(.primary, lineWidth: 1.5)
+                            .frame(width: min(94, max(3, visibleSize)),
+                                   height: min(94, max(3, visibleSize)))
+                    } else {
+                        Circle().fill(Color(uiColor: store.inkColor))
+                            .frame(width: min(94, max(1, visibleSize)),
+                                   height: min(94, max(1, visibleSize)))
+                    }
+                }
+                .frame(height: 100)
+                if visibleSize > 94 {
+                    Text("Preview capped to fit; value above is exact")
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .multilineTextAlignment(.center)
             if store.tool == .pen {
                 Menu {
                     ForEach(PenProfile.allCases) { profile in
@@ -688,8 +731,9 @@ struct ContentView: View {
             }
             GeometryReader { geometry in
                 let barHeight = geometry.size.height
-                let maxSize: CGFloat = store.mode == .art ? 80 : 18
-                let proportion = min(1, max(0, (store.strokeWidth - 0.4) / (maxSize - 0.4)))
+                let range = activeSizeLimits
+                let proportion = min(1, max(0, (activeSize - range.lowerBound) /
+                                                 (range.upperBound - range.lowerBound)))
                 ZStack(alignment: .bottom) {
                     Capsule()
                         .fill(Color.primary.opacity(0.08))
@@ -699,25 +743,24 @@ struct ContentView: View {
                             colors: [teal, Color.cyan.opacity(0.95), Color.blue.opacity(0.77)],
                             startPoint: .bottom, endPoint: .top))
                         .frame(width: 21, height: max(8, barHeight * proportion))
-                    Circle()
-                        .fill(.white)
-                        .frame(width: 34, height: 34)
-                        .overlay(Circle().stroke(teal, lineWidth: 3))
-                        .shadow(color: teal.opacity(0.25), radius: 5)
-                        .offset(y: -max(0, barHeight - 34) * proportion)
+                    Capsule()
+                        .fill(Color.white.opacity(0.9))
+                        .frame(width: 17, height: 6)
+                        .offset(y: -max(0, barHeight - 7) * proportion)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
                 .gesture(DragGesture(minimumDistance: 0).onChanged { value in
                     let ratio = 1 - min(1, max(0, value.location.y / max(1, barHeight)))
-                    store.strokeWidth = 0.4 + ratio * (maxSize - 0.4)
+                    let range = activeSizeLimits
+                    applySize(range.lowerBound + ratio * (range.upperBound - range.lowerBound))
                 })
             }
             .frame(height: 194)
-            .accessibilityLabel("Vertical pen width slider")
+            .accessibilityLabel("Vertical \(store.tool == .eraser ? "eraser" : "pen") size slider")
             HStack(spacing: 5) {
                 ForEach([1.3, 2.5, 5.0, 9.0], id: \.self) { width in
-                    Button { store.strokeWidth = CGFloat(width) } label: {
+                    Button { applySize(CGFloat(width)) } label: {
                         Circle()
                             .fill(teal)
                             .frame(width: CGFloat(max(5, min(21, width * 1.65))),
@@ -743,21 +786,8 @@ struct ContentView: View {
         }
         .padding(14)
         .frame(width: 205)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 29, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 29, style: .continuous)
-                .stroke(
-                    LinearGradient(colors: [
-                        Color.cyan.opacity(0.9),
-                        Color.blue.opacity(0.7),
-                        Color.purple.opacity(0.45),
-                        Color.cyan.opacity(0.7)
-                    ], startPoint: .topLeading, endPoint: .bottomTrailing),
-                    lineWidth: 2.2
-                )
-                .allowsHitTesting(false)
-        }
-        .shadow(color: .cyan.opacity(0.22), radius: 19, y: 6)
+        .modifier(CanvasGlassSurface(cornerRadius: 29))
+        .shadow(color: .black.opacity(0.10), radius: 16, y: 6)
     }
 
     private var textNoteCards: some View {
@@ -979,17 +1009,13 @@ private struct FingerDoubleTapTarget: UIViewRepresentable {
         )
         recognizer.numberOfTapsRequired = 2
         recognizer.numberOfTouchesRequired = 1
-        recognizer.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        recognizer.allowedTouchTypes = [
+            NSNumber(value: UITouch.TouchType.direct.rawValue),
+            NSNumber(value: UITouch.TouchType.pencil.rawValue)
+        ]
         recognizer.cancelsTouchesInView = true
-        let singleTap = UITapGestureRecognizer(
-            target: context.coordinator,
-            action: #selector(Coordinator.didDoubleTap(_:))
-        )
-        singleTap.numberOfTapsRequired = 1
-        singleTap.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
-        singleTap.require(toFail: recognizer)
+        // No single tap: accidental palm contact must not toggle paper mode.
         view.addGestureRecognizer(recognizer)
-        view.addGestureRecognizer(singleTap)
         return view
     }
 
@@ -1007,6 +1033,20 @@ private struct FingerDoubleTapTarget: UIViewRepresentable {
         @objc func didDoubleTap(_ recognizer: UITapGestureRecognizer) {
             guard recognizer.state == .ended else { return }
             onDoubleTap()
+        }
+    }
+}
+
+private struct CanvasGlassSurface: ViewModifier {
+    var cornerRadius: CGFloat
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
+        } else {
+            content.background(.ultraThinMaterial,
+                               in: RoundedRectangle(cornerRadius: cornerRadius))
         }
     }
 }
