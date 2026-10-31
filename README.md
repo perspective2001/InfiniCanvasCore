@@ -1,29 +1,39 @@
-# InfiniCanvasCore · versioned native Swift package
+# InfiniCanvasCore — native iPad engine
 
-This repository contains the *full* native Infini Canvas feature implementation extracted
-from the v0.8 Swift Playgrounds release: PencilKit writing, RestSafe, zoom, lasso,
-clip library, CanvasStore, Art Studio, typed notes, notes organization and backups.
+This is the **updatable Swift package** for the personal **Infini Canvas** iPad app. It contains the v0.8 SwiftUI / UIKit / PencilKit source: handwriting, RestSafe, lasso, zoom, clips, study tools, lecture recordings, organization, and Art Studio.
 
-## Installation into Swift Playgrounds
+The permanent Swift Playgrounds host is a separate minimal `.swiftpm` app that imports the package:
 
-Add this repository as a **Swift Package** to the **one permanent**
-`InfiniCanvas-Permanent.swiftpm` host app. The host imports `InfiniCanvasCore` and
-presents `InfiniCanvasRootView()`. The project source and the native engine remain
-SwiftUI/PencilKit; this is not a web wrapper.
+```swift
+import SwiftUI
+import InfiniCanvasCore
 
-Future updates: refresh the **Packages** dependency from Swift Playgrounds and tap
-Play. Do not import or overwrite Swift source files manually. Branch `main` is the
-update channel, so changes should first be tested before updating it.
+@main struct InfiniCanvasApp: App {
+    var body: some Scene {
+        WindowGroup { InfiniCanvasRootView() }
+    }
+}
+```
 
-The package must be reachable over Git before the host can build. This project
-is **prepared locally** and cannot compile in Swift Playgrounds until the GitHub
-repository is created and populated.
+The host's `Package.swift` points to `https://github.com/perspective2001/InfiniCanvasCore.git` on branch `main` and uses the `InfiniCanvasCore` library product.
 
-No user notes, app documents or keys are included in this repository. They are
-stored in the installed app's on-device Documents directory.
+## First installation (one time)
 
-## Native build verification
+1. Extract `InfiniCanvas-Permanent-Install-Once.zip` in the iPad Files app.
+2. Open **`InfiniCanvas-Permanent.swiftpm`** through **Swift Playgrounds → Browse**.
+3. Allow Swift Playgrounds to fetch the Swift package. If prompted, select the `InfiniCanvasCore` product.
+4. Press **Play**, then verify writing, lasso, RestSafe, autosaving, and reopening with **test ink**.
+5. Keep your previously working app until you confirm the new permanent host compiles and runs. Initial installation is **not** guaranteed to transfer old on-device drawings.
 
-The source and manifest are syntax-tested here but Apple SDK linking and native
-running require an iPad. Do not erase a proven working app until the permanent host
-builds and note persistence is tested.
+## Future code updates
+
+1. Updates are committed to `main` in this repository (ideally after testing).
+2. On iPad, open the **same permanent Playground project**.
+3. Long-press **Packages** in the left sidebar and choose **Update All Package Dependencies**.
+4. Tap **Play**. No new app ZIP is needed for package-only changes.
+
+Updating is **not** automatic in the background. Changing host permissions, the bundle ID, or the app's own dependency declaration may require a rare host update.
+
+## Source, privacy and verification
+
+Only application source is stored here — never handwritten notes or backups. User content is saved on-device by the native app; back up data before major migrations. Swift source parses, the package manifest passes `swift package dump-package`, and uploaded GitHub file hashes were verified against the original local files. **Full iPadOS SDK compilation and Apple Pencil behavior still require testing in Swift Playgrounds.**
