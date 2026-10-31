@@ -165,6 +165,7 @@ final class ArtworkStore: ObservableObject {
 
 struct ArtStudioView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var art = ArtworkStore()
     @State private var showLayers = true
     @State private var shareURL: URL?
@@ -234,6 +235,9 @@ struct ArtStudioView: View {
             .background(.regularMaterial)
         }
         .onDisappear { art.saveNow() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background { art.saveNow() }
+        }
         .sheet(isPresented: $showShare) {
             if let shareURL { SystemShareSheet(items: [shareURL]) }
         }
