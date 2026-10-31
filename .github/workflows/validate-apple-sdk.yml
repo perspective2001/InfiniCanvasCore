@@ -7,6 +7,12 @@ on:
       - 'Sources/**'
       - 'Package.swift'
       - '.github/workflows/validate-apple-sdk.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'Sources/**'
+      - 'Package.swift'
+      - '.github/workflows/validate-apple-sdk.yml'
   workflow_dispatch:
 
 permissions:
