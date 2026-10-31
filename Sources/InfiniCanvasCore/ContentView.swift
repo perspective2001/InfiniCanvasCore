@@ -14,6 +14,9 @@ struct ContentView: View {
     @State private var newAreaName = ""
     @State private var focusMode = false
     @State private var shareURL: URL?
+    @State private var shareItems: [Any] = []
+    @State private var stashDropFrame: CGRect = .null
+    @Namespace private var widthMorph
     @State private var showShare = false
     @State private var importing = false
     @State private var selectedImportURL: URL?
@@ -50,9 +53,10 @@ struct ContentView: View {
             PencilCanvas(store: store)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            if store.tool == .capture { LassoOverlay(store: store) }
+            if store.tool == .capture { LassoOverlay(store: store, stashDropFrame: stashDropFrame) }
             if store.tool == .marker && store.fixedHighlighter { FixedHighlighterOverlay(store: store) }
             if let focus = store.focusedArea { isolatedAreaShade(focus).allowsHitTesting(false) }
+            spatialOrganizerOverlay
             if store.tool != .capture && !focusMode && store.zoom > 0.5 { textNoteCards
                 .allowsHitTesting(!store.restSafe)
             }
@@ -68,8 +72,15 @@ struct ContentView: View {
                     if focusMode {
                         focusHeader
                     } else {
-                        topChromeGrip
-                        if showTopBar { header }
+                        if showTopBar {
+                            topChromeGrip
+                            header
+                            if !store.stashedClips.isEmpty { clipActionShelf }
+                        } else {
+                            // Compact mode puts the actual tools almost flush to the top.
+                            // The thin transparent grip still accepts a deliberate down swipe.
+                            topChromeGrip.frame(height: 10)
+                        }
                         toolShelf
                     }
                     Spacer(minLength: 0)
@@ -80,14 +91,20 @@ struct ContentView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(red: 0.991, green: 0.984, blue: 0.961))
-        .overlay(alignment: .trailing) { sideFocusHandle }
+        .overlay(alignment: .leading) {
+            if !paperOnly { edgeHistoryControl(isUndo: true) }
+        }
+        .overlay(alignment: .trailing) {
+            if !paperOnly { edgeHistoryControl(isUndo: false) }
+        }
+        .overlay(alignment: .topTrailing) { sideFocusHandle.padding(.top, 125) }
         .overlay(alignment: .top) {
             if paperOnly { topChromeGrip }
         }
         .overlay(alignment: .topTrailing) {
             if widthPanelExpanded && !paperOnly && !focusMode {
                 floatingWidthPanel
-                    .padding(.top, 105)
+                    .padding(.top, showTopBar ? 105 : 38)
                     .padding(.trailing, 20)
                     .zIndex(99)
                     .transition(.asymmetric(
@@ -133,7 +150,7 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $showShare) {
-            if let url = shareURL { SystemShareSheet(items: [url]) }
+            if !shareItems.isEmpty { SystemShareSheet(items: shareItems) }
         }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
             if case .success(let url) = result { selectedImportURL = url; confirmRestore = true }
@@ -178,31 +195,36 @@ struct ContentView: View {
         }
     }
 
-    // A dedicated UIKit recognizer avoids SwiftUI/PencilKit competing for the right-edge double tap.
-    // The hit area is deliberately much larger than the visible marker.
+    // Invisible extreme-right strip: only an intentional double tap toggles
+    // paper-only mode. Both Apple Pencil and finger are accepted; no tap button
+    // or bright green affordance obscures the drawing.
     private var sideFocusHandle: some View {
-        ZStack(alignment: .trailing) {
-            FingerDoubleTapTarget {
-                withAnimation(.spring(response: 0.30, dampingFraction: 0.87)) {
-                    paperOnly.toggle()
-                    widthPanelExpanded = false
-                }
+        FingerDoubleTapTarget {
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.84)) {
+                paperOnly.toggle()
+                widthPanelExpanded = false
             }
-            Capsule()
-                .fill(paperOnly ? teal.opacity(0.92) : teal.opacity(0.62))
-                .frame(width: 9, height: 68)
-                .overlay(alignment: .center) {
-                    Image(systemName: paperOnly ? "chevron.left" : "chevron.right")
-                        .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(.white)
-                }
-                .padding(.trailing, 10)
-                .allowsHitTesting(false)
         }
-        .frame(width: 76, height: 176)
+        .frame(width: 32, height: 120)
         .contentShape(Rectangle())
-        .accessibilityLabel(paperOnly ? "Restore all controls" : "Hide all controls and show only paper")
-        .accessibilityHint("Tap or double-tap the right-edge handle to switch paper-only mode")
+        .accessibilityLabel("Double tap extreme right edge to toggle paper-only mode")
+    }
+
+    private func edgeHistoryControl(isUndo: Bool) -> some View {
+        Button {
+            if isUndo { store.undo() } else { store.redo() }
+        } label: {
+            Image(systemName: isUndo ? "arrow.uturn.backward" : "arrow.uturn.forward")
+                .font(.system(size: 17, weight: .medium))
+                .frame(width: 38, height: 45)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .modifier(CanvasGlassSurface(cornerRadius: 15))
+        .padding(isUndo ? .leading : .trailing, 2)
+        .keyboardShortcut("z", modifiers: isUndo ? .command : [.command, .shift])
+        .accessibilityLabel(isUndo ? "Undo" : "Redo")
+        .accessibilityHint("Requires a deliberate tap; hidden in paper-only mode")
     }
 
     // Always-present top handle. Swipe UP to tuck the header away, DOWN to reveal.
@@ -211,10 +233,8 @@ struct ContentView: View {
     private var topChromeGrip: some View {
         ZStack {
             Color.clear.contentShape(Rectangle())
-            Capsule()
-                .fill(teal.opacity(paperOnly ? 0.30 : 0.58))
-                .frame(width: 52, height: 6)
-                .allowsHitTesting(false)
+            // No coloured tab remains visible when the menus are hidden.
+            Color.clear.frame(width: 52, height: 6).allowsHitTesting(false)
         }
         .frame(height: 30)
         .frame(maxWidth: .infinity)
@@ -247,7 +267,7 @@ struct ContentView: View {
                     }
                 }
         )
-        .background(paperOnly ? Color.clear : Color(uiColor: .systemBackground).opacity(0.72))
+        .background(Color.clear)
         .accessibilityLabel("Top controls grip")
         .accessibilityHint("Swipe up to hide the command bar, swipe down to reveal it, or tap to toggle")
     }
@@ -328,7 +348,6 @@ struct ContentView: View {
                 .accessibilityHint("Open the separately saved layered Art Studio")
             }
             Spacer(minLength: 4)
-            historyButtons
             palmModeButton
             Menu {
                 Button("Overview · 14%", systemImage: "square.dashed") { store.zoomToOverview() }
@@ -363,8 +382,7 @@ struct ContentView: View {
         }
         .padding(.horizontal, 13)
         .padding(.vertical, 7)
-        .background(.regularMaterial)
-        .overlay(alignment: .bottom) { Rectangle().fill(.black.opacity(0.05)).frame(height: 0.5) }
+        .modifier(CanvasGlassSurface(cornerRadius: 20))
     }
 
     // Uncommon actions belong in menus, not between the Pencil and undo controls.
@@ -400,6 +418,8 @@ struct ContentView: View {
             Button("Apple Pencil palette", systemImage: "paintpalette") { store.showSystemTools() }
             Button("Minimal writing controls", systemImage: "arrow.up.left.and.arrow.down.right") { focusMode = true }
             Button("Hide top command bar", systemImage: "chevron.up") { showTopBar = false }
+            Button("Jump to most recent handwriting", systemImage: "location.magnifyingglass") { store.goToLastInk() }
+            Button("Go to spatial organizer", systemImage: "square.grid.2x2") { store.openSpatialOrganizer() }
             Button("Hide all menus", systemImage: "rectangle.dashed") { paperOnly = true }
             if !store.organizedUndo.isEmpty {
                 Button("Undo last organization", systemImage: "arrow.uturn.backward") { store.undoOrganization() }
@@ -437,7 +457,6 @@ struct ContentView: View {
 
     private var focusHeader: some View {
         HStack(spacing: 10) {
-            historyButtons
             palmModeButton
             Spacer(minLength: 0)
             Label(store.isSaved ? "Saved" : "Saving", systemImage: store.isSaved ? "checkmark.circle.fill" : "clock")
@@ -457,6 +476,17 @@ struct ContentView: View {
     private var toolShelf: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
+                Button {
+                    withAnimation(.spring(response: 0.32, dampingFraction: 0.84)) {
+                        showTopBar.toggle()
+                    }
+                } label: {
+                    Image(systemName: showTopBar ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(width: 36, height: 46)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(showTopBar ? "Compact top controls" : "Reveal complete command bar")
                 ForEach(CanvasTool.allCases) { tool in
                     Button {
                         if tool == .pen {
@@ -479,8 +509,9 @@ struct ContentView: View {
                                  tool.rawValue).font(.system(size: 10, weight: .medium))
                         }
                         .frame(minWidth: 57, minHeight: 48)
-                        .foregroundStyle(store.tool == tool ? .white : Color.primary)
-                        .background(store.tool == tool ? teal : Color.clear, in: RoundedRectangle(cornerRadius: 11))
+                        .foregroundStyle(store.tool == tool ? teal : Color.primary)
+                        .background(store.tool == tool ? teal.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 11))
+                        .modifier(CanvasGlassSurface(cornerRadius: 11))
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(tool.rawValue)
@@ -568,12 +599,158 @@ struct ContentView: View {
                     }.buttonStyle(.bordered)
                 }
                 penWidthTrigger
+                if store.tool == .capture { stashWell }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 5)
         }
-        .background(Color(red: 0.964, green: 0.967, blue: 0.962))
+        .modifier(CanvasGlassSurface(cornerRadius: 20))
     }
+
+    // Lassoed original ink stays on canvas. Only the miniature, persistent clip
+    // is stashed; PencilKit restores any detached drag preview on drop.
+    private var stashWell: some View {
+        HStack(spacing: 4) {
+            if let clip = store.stashedClips.last, let preview = store.clipImage(clip) {
+                Image(uiImage: preview)
+                    .resizable().scaledToFit().frame(width: 38, height: 32)
+                    .clipShape(RoundedRectangle(cornerRadius: 7))
+                    .draggable(clip.id.uuidString) {
+                        Image(uiImage: preview)
+                            .resizable().scaledToFit()
+                            .frame(width: 66, height: 48)
+                            .padding(5)
+                            .modifier(CanvasGlassSurface(cornerRadius: 12))
+                    }
+                    .accessibilityLabel("Drag stashed clip to Learn, ChatGPT or Organize")
+                if store.stashedClipIDs.count > 1 {
+                    Text("\(store.stashedClipIDs.count)")
+                        .font(.caption2.monospacedDigit())
+                }
+                Button { store.removeFromStash(clip.id) } label: {
+                    Image(systemName: "xmark").font(.system(size: 10, weight: .bold))
+                }.buttonStyle(.plain)
+                 .accessibilityLabel("Dismiss temporary thumbnail without deleting ink")
+            } else {
+                Image(systemName: "square.on.square.dashed").font(.system(size: 13))
+                Text("Stash").font(.caption2.weight(.semibold))
+            }
+        }
+        .frame(minWidth: 71, minHeight: 44)
+        .padding(.horizontal, 6)
+        .foregroundStyle(teal)
+        .background(teal.opacity(0.12), in: Capsule())
+        .modifier(CanvasGlassSurface(cornerRadius: 20))
+        .background {
+            GeometryReader { geometry in
+                Color.clear.preference(key: StashDropFramePreferenceKey.self,
+                                       value: geometry.frame(in: .global))
+            }
+        }
+        .onPreferenceChange(StashDropFramePreferenceKey.self) { stashDropFrame = $0 }
+        .animation(.spring(response: 0.36, dampingFraction: 0.76), value: store.stashedClipIDs.count)
+    }
+
+    // Drag a tiny thumbnail from the stash well up to one of these actions.
+    private var clipActionShelf: some View {
+        HStack(spacing: 10) {
+            Text("Drop clip")
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.secondary)
+            ForEach(ClipDropAction.allCases, id: \.self) { action in
+                Label(action.rawValue, systemImage: action.icon)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(teal)
+                    .padding(.horizontal, 9)
+                    .frame(height: 34)
+                    .modifier(CanvasGlassSurface(cornerRadius: 16))
+                    .dropDestination(for: String.self) { incoming, _ in
+                        guard let raw = incoming.first,
+                              let id = UUID(uuidString: raw) else { return false }
+                        return handleClipDrop(id, action: action)
+                    }
+                    .onTapGesture {
+                        if action == .organize { store.openSpatialOrganizer() }
+                    }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 3)
+        .transition(.move(edge: .top).combined(with: .opacity))
+    }
+
+    private func handleClipDrop(_ id: UUID, action: ClipDropAction) -> Bool {
+        guard store.stashedClipIDs.contains(id),
+              let clip = store.clips.first(where: { $0.id == id && $0.isTrashed != true })
+        else { return false }
+        switch action {
+        case .organize: return store.addToSpatialOrganizer(id)
+        case .learn: shareClip(clip, learning: true)
+        case .chat: shareClip(clip, learning: false)
+        }
+        return true
+    }
+
+    private func shareClip(_ clip: SavedClip, learning: Bool) {
+        let imageURL = store.clipURL(clip)
+        // The share sheet can offer ChatGPT if installed and compatible.
+        // It does NOT auto-post to a chat or guarantee connected Drive retrieval.
+        shareItems = learning ? [imageURL, store.studyPrompt(for: clip)] : [imageURL]
+        showShare = true
+    }
+
+    @ViewBuilder
+    private var spatialOrganizerOverlay: some View {
+        if let area = store.spatialOrganizerArea, !store.spatialOrganizerClips.isEmpty,
+           store.tool != .capture {
+            GeometryReader { geometry in
+                let p = store.screenPoint(for: area)
+                if p.x > -280 && p.x < geometry.size.width + 280 &&
+                   p.y > -240 && p.y < geometry.size.height + 240 {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("Organized study clips", systemImage: "square.grid.2x2")
+                            .font(.caption.weight(.semibold))
+                        ScrollView(.horizontal) {
+                            HStack(spacing: 6) {
+                                ForEach(Array(store.spatialOrganizerClips.enumerated()), id: \.element.id) { index, clip in
+                                    Button { store.goToClip(clip) } label: {
+                                        VStack(spacing: 2) {
+                                            if let image = store.clipImage(clip) {
+                                                Image(uiImage: image).resizable().scaledToFit()
+                                                    .frame(width: 55, height: 40)
+                                            }
+                                            Text("\(index + 1)").font(.caption2.monospacedDigit())
+                                        }
+                                        .frame(width: 70, height: 62)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
+                    .padding(11).frame(width: 260)
+                    .modifier(CanvasGlassSurface(cornerRadius: 20))
+                    .position(p)
+                }
+            }
+        }
+    }
+
+    private var activeSize: CGFloat {
+        store.tool == .eraser ? store.eraserWidth : store.strokeWidth
+    }
+    private var activeSizeLimits: ClosedRange<CGFloat> {
+        if store.tool == .eraser { return 3...60 }
+        return 0.4...(store.mode == .art ? 80 : 18)
+    }
+    private func applySize(_ requested: CGFloat) {
+        let range = activeSizeLimits
+        let value = min(range.upperBound, max(range.lowerBound, requested))
+        if store.tool == .eraser { store.eraserWidth = value }
+        else { store.strokeWidth = value }
+    }
+    // Effective screen size is specified in *points*, not device pixels.
+    private var visibleSize: CGFloat { activeSize * store.zoom }
 
     // Swipe upward from the compact width icon to reveal an expanding, directly
     // draggable vertical width slider. The same gesture can immediately change
@@ -587,7 +764,7 @@ struct ContentView: View {
             HStack(spacing: 7) {
                 Image(systemName: "lineweight")
                     .font(.system(size: 18, weight: .medium))
-                Text(String(format: "%.1f", Double(store.strokeWidth)))
+                Text(String(format: "%.1f", Double(activeSize)))
                     .font(.caption.monospacedDigit().weight(.semibold))
                     .frame(minWidth: 35, alignment: .trailing)
             }
@@ -595,23 +772,25 @@ struct ContentView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.bordered)
-        .accessibilityLabel("Pen size: \(String(format: "%.1f", Double(store.strokeWidth)))")
+        .matchedGeometryEffect(id: "penSizePill", in: widthMorph,
+                               properties: .frame, anchor: .topTrailing,
+                               isSource: !widthPanelExpanded)
+        .accessibilityLabel("Tool width \(String(format: "%.1f", Double(activeSize))) points, \(String(format: "%.1f", Double(visibleSize))) at current zoom")
         .accessibilityHint("Swipe up to expand size slider, keep dragging to resize, or tap")
         .highPriorityGesture(
             DragGesture(minimumDistance: 7)
                 .onChanged { value in
-                    if value.translation.height < -12 {
-                        if widthDragStart == nil {
-                            widthDragStart = store.strokeWidth
-                            withAnimation(.spring(response: 0.34, dampingFraction: 0.77)) {
-                                widthPanelExpanded = true
-                            }
+                    if widthDragStart == nil {
+                        guard value.translation.height < -12 else { return }
+                        widthDragStart = activeSize
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
+                            widthPanelExpanded = true
                         }
-                        let baseline = widthDragStart ?? store.strokeWidth
-                        let maxSize: CGFloat = store.mode == .art ? 80 : 18
-                        store.strokeWidth = min(maxSize, max(0.4,
-                            baseline + (-value.translation.height - 12) * 0.075))
                     }
+                    // Once expanded, continuing downward lowers the size,
+                    // including below the trigger's bottom edge.
+                    let baseline = widthDragStart ?? activeSize
+                    applySize(baseline + (-value.translation.height - 12) * 0.075)
                 }
                 .onEnded { value in
                     widthDragStart = nil
@@ -624,115 +803,111 @@ struct ContentView: View {
         )
     }
 
+    // A narrow drop-shaped extension of the existing 84-point width pill,
+    // NOT a sidebar. It expands upward and remains the same teal-green identity.
     private var floatingWidthPanel: some View {
-        VStack(spacing: 11) {
+        VStack(spacing: 7) {
             Capsule()
-                .fill(teal.opacity(0.55))
-                .frame(width: 43, height: 5)
-                .frame(height: 23)
+                .fill(teal.opacity(0.52))
+                .frame(width: 31, height: 4)
+                .frame(height: 17)
                 .contentShape(Rectangle())
-                .gesture(DragGesture(minimumDistance: 10).onEnded { value in
-                    if value.translation.height > 30 {
-                        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                .gesture(DragGesture(minimumDistance: 8).onEnded { value in
+                    if value.translation.height > 24 {
+                        withAnimation(.spring(response: 0.31, dampingFraction: 0.76)) {
                             widthPanelExpanded = false
                         }
                     }
                 })
-                .accessibilityLabel("Swipe down to close pen size")
-            HStack(spacing: 8) {
-                Image(systemName: "lineweight").foregroundStyle(teal)
-                Text(String(format: "%.1f pt", Double(store.strokeWidth)))
-                    .font(.system(size: 16, weight: .semibold, design: .rounded).monospacedDigit())
+                .accessibilityLabel("Swipe down to collapse width")
+            HStack(spacing: 4) {
+                Image(systemName: store.tool == .eraser ? "eraser" : "lineweight")
+                Text(String(format: "%.1f", Double(activeSize)))
+                    .monospacedDigit()
             }
-            .frame(maxWidth: .infinity)
+            .font(.system(size: 13, weight: .semibold, design: .rounded))
+            .foregroundStyle(teal)
+            Text(String(format: "%.0f%% · %.1f pt",
+                        Double(store.zoom * 100), Double(visibleSize)))
+                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .minimumScaleFactor(0.7)
+                .lineLimit(1)
+                .accessibilityLabel("Width at the current zoom, in points")
+            ZStack {
+                Circle().strokeBorder(teal.opacity(0.16), lineWidth: 1)
+                    .frame(width: 57, height: 57)
+                if store.tool == .eraser {
+                    Circle().strokeBorder(teal, lineWidth: 1.8)
+                        .frame(width: min(57, max(3, visibleSize)),
+                               height: min(57, max(3, visibleSize)))
+                } else {
+                    Circle().fill(Color(uiColor: store.inkColor))
+                        .frame(width: min(57, max(1, visibleSize)),
+                               height: min(57, max(1, visibleSize)))
+                }
+            }
+            .frame(height: 60)
+            .accessibilityLabel("Actual width preview at current zoom; capped at 57 points")
             if store.tool == .pen {
                 Menu {
                     ForEach(PenProfile.allCases) { profile in
                         Button(profile.rawValue) { store.penProfile = profile }
                     }
                 } label: {
-                    HStack {
-                        Text(store.penProfile.rawValue)
-                        Image(systemName: "chevron.down").font(.caption)
-                    }
-                    .font(.caption.weight(.medium))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 7)
-                    .background(teal.opacity(0.08), in: Capsule())
+                    Text(store.penProfile.rawValue)
+                        .font(.system(size: 10, weight: .medium))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 5)
+                        .background(teal.opacity(0.09), in: Capsule())
                 }
+                .foregroundStyle(teal)
             }
             GeometryReader { geometry in
-                let barHeight = geometry.size.height
-                let maxSize: CGFloat = store.mode == .art ? 80 : 18
-                let proportion = min(1, max(0, (store.strokeWidth - 0.4) / (maxSize - 0.4)))
+                let height = geometry.size.height
+                let range = activeSizeLimits
+                let percent = min(1, max(0, (activeSize - range.lowerBound) /
+                                             (range.upperBound - range.lowerBound)))
                 ZStack(alignment: .bottom) {
-                    Capsule()
-                        .fill(Color.primary.opacity(0.08))
-                        .frame(width: 21)
-                    Capsule()
-                        .fill(LinearGradient(
-                            colors: [teal, Color.cyan.opacity(0.95), Color.blue.opacity(0.77)],
-                            startPoint: .bottom, endPoint: .top))
-                        .frame(width: 21, height: max(8, barHeight * proportion))
-                    Circle()
-                        .fill(.white)
-                        .frame(width: 34, height: 34)
-                        .overlay(Circle().stroke(teal, lineWidth: 3))
-                        .shadow(color: teal.opacity(0.25), radius: 5)
-                        .offset(y: -max(0, barHeight - 34) * proportion)
+                    Capsule().fill(teal.opacity(0.12)).frame(width: 19)
+                    Capsule().fill(LinearGradient(
+                        colors: [teal, Color.cyan.opacity(0.75)],
+                        startPoint: .bottom, endPoint: .top))
+                        .frame(width: 19, height: max(4, height * percent))
+                    Capsule().fill(.white.opacity(0.9))
+                        .frame(width: 15, height: 5)
+                        .offset(y: -max(0, height - 6) * percent)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
                 .gesture(DragGesture(minimumDistance: 0).onChanged { value in
-                    let ratio = 1 - min(1, max(0, value.location.y / max(1, barHeight)))
-                    store.strokeWidth = 0.4 + ratio * (maxSize - 0.4)
+                    let ratio = 1 - min(1, max(0, value.location.y / max(1, height)))
+                    applySize(range.lowerBound + ratio * (range.upperBound - range.lowerBound))
                 })
             }
-            .frame(height: 194)
-            .accessibilityLabel("Vertical pen width slider")
-            HStack(spacing: 5) {
-                ForEach([1.3, 2.5, 5.0, 9.0], id: \.self) { width in
-                    Button { store.strokeWidth = CGFloat(width) } label: {
-                        Circle()
-                            .fill(teal)
-                            .frame(width: CGFloat(max(5, min(21, width * 1.65))),
-                                   height: CGFloat(max(5, min(21, width * 1.65))))
-                            .frame(width: 37, height: 37)
-                            .background(Color.primary.opacity(0.055), in: Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Width preset \(width)")
-                }
-            }
-            .frame(maxWidth: .infinity)
+            .frame(height: 150)
+            .accessibilityLabel("Continuous vertical brush or eraser width slider")
             Button {
-                withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.79)) {
                     widthPanelExpanded = false
                 }
             } label: {
-                Label("Done", systemImage: "chevron.down")
+                Image(systemName: "chevron.down")
                     .font(.caption.weight(.semibold))
-                    .frame(maxWidth: .infinity, minHeight: 34)
+                    .frame(width: 35, height: 23)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.plain)
+            .foregroundStyle(teal)
         }
-        .padding(14)
-        .frame(width: 205)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 29, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 29, style: .continuous)
-                .stroke(
-                    LinearGradient(colors: [
-                        Color.cyan.opacity(0.9),
-                        Color.blue.opacity(0.7),
-                        Color.purple.opacity(0.45),
-                        Color.cyan.opacity(0.7)
-                    ], startPoint: .topLeading, endPoint: .bottomTrailing),
-                    lineWidth: 2.2
-                )
-                .allowsHitTesting(false)
-        }
-        .shadow(color: .cyan.opacity(0.22), radius: 19, y: 6)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 8)
+        .frame(width: 111)
+        .modifier(CanvasGlassSurface(cornerRadius: 30))
+        .matchedGeometryEffect(id: "penSizePill", in: widthMorph,
+                               properties: .frame, anchor: .topTrailing,
+                               isSource: widthPanelExpanded)
+        .shadow(color: teal.opacity(0.15), radius: 12, y: 5)
     }
 
     private var textNoteCards: some View {
@@ -832,16 +1007,17 @@ struct ContentView: View {
 
     private var lassoActions: some View {
         VStack(spacing: 8) {
-            Text("Circle with Pencil → clip automatically saved. Palm and finger touches ignored.")
+            Text("Circle with Pencil, drag into Stash above, then drag its small thumbnail to Learn, ChatGPT or Organize.")
                 .font(.caption).foregroundStyle(.secondary)
             if store.selectionActive, let clip = store.latestClip {
                 HStack(spacing: 8) {
                     Label("Captured", systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green).font(.caption.weight(.semibold))
                     Button("Copy") { store.copyClip(clip) }.buttonStyle(.bordered)
-                    Button("Share") { shareURL = store.clipURL(clip); showShare = true }.buttonStyle(.bordered)
-                    Button("Open GPT") { openSpecificChat(clip) }.buttonStyle(.borderedProminent)
-                    Button("Study prompt") { store.copyStudyPrompt(clip) }.buttonStyle(.bordered)
+                    Button("Share") { shareItems = [store.clipURL(clip)]; showShare = true }.buttonStyle(.bordered)
+                    Button("Stash") { _ = store.stashSelectedInk() }.buttonStyle(.borderedProminent)
+                    Button("Open GPT") { shareClip(clip, learning: false) }.buttonStyle(.bordered)
+                    Button("Learn") { shareClip(clip, learning: true) }.buttonStyle(.bordered)
                     Button("Make area") { store.makeAreaFromSelection() }.buttonStyle(.bordered)
                     Menu {
                         if store.activeAreas.isEmpty { Text("Mark an area first") }
@@ -877,7 +1053,7 @@ struct ContentView: View {
     }
 
     private func shareBackup() {
-        if let url = store.exportCompleteBackup() { shareURL = url; showShare = true }
+        if let url = store.exportCompleteBackup() { shareItems = [url]; showShare = true }
     }
     private func openSpecificChat(_ clip: SavedClip) {
         store.copyClip(clip)
@@ -954,17 +1130,13 @@ private struct FingerDoubleTapTarget: UIViewRepresentable {
         )
         recognizer.numberOfTapsRequired = 2
         recognizer.numberOfTouchesRequired = 1
-        recognizer.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        recognizer.allowedTouchTypes = [
+            NSNumber(value: UITouch.TouchType.direct.rawValue),
+            NSNumber(value: UITouch.TouchType.pencil.rawValue)
+        ]
         recognizer.cancelsTouchesInView = true
-        let singleTap = UITapGestureRecognizer(
-            target: context.coordinator,
-            action: #selector(Coordinator.didDoubleTap(_:))
-        )
-        singleTap.numberOfTapsRequired = 1
-        singleTap.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
-        singleTap.require(toFail: recognizer)
+        // No single tap: accidental palm contact must not toggle paper mode.
         view.addGestureRecognizer(recognizer)
-        view.addGestureRecognizer(singleTap)
         return view
     }
 
@@ -983,5 +1155,52 @@ private struct FingerDoubleTapTarget: UIViewRepresentable {
             guard recognizer.state == .ended else { return }
             onDoubleTap()
         }
+    }
+}
+
+private struct CanvasGlassSurface: ViewModifier {
+    var cornerRadius: CGFloat
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        // CALayer.render(in:) in the unit-test simulator cannot capture the
+        // GPU glass compositor. Only the root-layout screenshot test enables
+        // this clearly labelled solid snapshot surface; shipping UI is intact.
+        if ProcessInfo.processInfo.environment["INFINI_CANVAS_CI_SNAPSHOT"] == "1" {
+            content.background(
+                Color(red: 0.86, green: 0.94, blue: 0.92),
+                in: RoundedRectangle(cornerRadius: cornerRadius)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .stroke(Color(red: 0.07, green: 0.40, blue: 0.43).opacity(0.35), lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
+        } else if #available(iOS 26.0, *) {
+            content.glassEffect(.regular.tint(Color(red: 0.07, green: 0.40, blue: 0.43).opacity(0.22)),
+                                in: .rect(cornerRadius: cornerRadius))
+        } else {
+            content.background(.ultraThinMaterial,
+                               in: RoundedRectangle(cornerRadius: cornerRadius))
+        }
+    }
+}
+
+private enum ClipDropAction: String, CaseIterable {
+    case learn = "Learn", chat = "ChatGPT", organize = "Organize"
+    var icon: String {
+        switch self {
+        case .learn: return "graduationcap"
+        case .chat: return "bubble.left.and.bubble.right"
+        case .organize: return "square.grid.2x2"
+        }
+    }
+}
+
+private struct StashDropFramePreferenceKey: PreferenceKey {
+    static var defaultValue: CGRect = .null
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let frame = nextValue()
+        if frame != .null { value = frame }
     }
 }

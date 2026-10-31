@@ -115,6 +115,10 @@ struct CanvasIndex: Codable {
     var indexVersion: Int? = nil
     var textNotes: [TypedNote]? = nil
     var lectureSessions: [LectureSession]? = nil
+    // Optional fields keep older local indexes and exported backups readable.
+    var stashedClipIDs: [UUID]? = nil
+    var organizedClipIDs: [UUID]? = nil
+    var organizerAreaID: UUID? = nil
 }
 
 struct CompleteBackup: Codable {
@@ -155,6 +159,9 @@ final class CanvasStore: ObservableObject {
     }
     @Published var paper: PaperStyle = .blank { didSet { canvas?.backgroundColor = Self.paperBackground(paper); saveIndex() } }
     @Published var clips: [SavedClip] = []
+    @Published private(set) var stashedClipIDs: [UUID] = []
+    @Published private(set) var organizedClipIDs: [UUID] = []
+    @Published private(set) var organizerAreaID: UUID? = nil
     @Published var areas: [CanvasArea] = []
     @Published var textNotes: [TypedNote] = []
     // Palm rest cannot pan the drawing. Unlock only when the user needs navigation.
@@ -240,6 +247,9 @@ final class CanvasStore: ObservableObject {
         if let data = try? Data(contentsOf: indexFile), let model = try? JSONDecoder().decode(CanvasIndex.self, from: data) {
             clips = model.clips
             areas = model.areas
+            stashedClipIDs = model.stashedClipIDs ?? []
+            organizedClipIDs = model.organizedClipIDs ?? []
+            organizerAreaID = model.organizerAreaID
             textNotes = model.textNotes ?? []
             lectureSessions = model.lectureSessions ?? []
             paper = model.paper ?? .blank
@@ -644,8 +654,10 @@ final class CanvasStore: ObservableObject {
         try JSONEncoder().encode(model).write(to: indexFile, options: .atomic)
     }
     private func currentIndex() -> CanvasIndex {
-        CanvasIndex(areas: areas, clips: clips, paper: paper, indexVersion: 5,
-            textNotes: textNotes, lectureSessions: lectureSessions)
+        CanvasIndex(areas: areas, clips: clips, paper: paper, indexVersion: 6,
+            textNotes: textNotes, lectureSessions: lectureSessions,
+            stashedClipIDs: stashedClipIDs, organizedClipIDs: organizedClipIDs,
+            organizerAreaID: organizerAreaID)
     }
 
     private func packageBackup(drawingData: Data) -> CompleteBackup {
@@ -754,9 +766,23 @@ final class CanvasStore: ObservableObject {
             let center = CGPoint(x: stroke.renderBounds.midX, y: stroke.renderBounds.midY)
             var inside = polygon.contains(center)
             if !inside {
-                let strideSize = max(1, stroke.path.count / 120)
-                for j in stride(from: 0, to: stroke.path.count, by: strideSize) {
-                    if polygon.contains(stroke.path[j].location.applying(stroke.transform)) { inside = true; break }
+                // A long handwriting stroke can cross a thin lasso but have
+                // its centre and all sampled endpoints outside the polygon.
+                // Include transformed stroke segments, not only sample points.
+                let step = max(1, stroke.path.count / 400)
+                var previous: CGPoint?
+                for j in stride(from: 0, to: stroke.path.count, by: step) {
+                    let point = stroke.path[j].location.applying(stroke.transform)
+                    if polygon.contains(point) ||
+                       (previous.map { CanvasGeometry.segmentCrossesPolygon($0, point, polygon: locations) } ?? false) {
+                        inside = true; break
+                    }
+                    previous = point
+                }
+                if !inside, let tail = stroke.path.last?.location.applying(stroke.transform),
+                   let last = previous {
+                    inside = polygon.contains(tail) ||
+                        CanvasGeometry.segmentCrossesPolygon(last, tail, polygon: locations)
                 }
             }
             if inside { indices.insert(i); selected.append(stroke) }
@@ -927,6 +953,83 @@ final class CanvasStore: ObservableObject {
         status = "Ink removed · Undo to restore"
     }
 
+    // A temporary stashed thumbnail references an already exported image/vector
+    // clip, without removing or changing original on-canvas handwriting.
+    var stashedClips: [SavedClip] {
+        stashedClipIDs.compactMap { id in
+            clips.first { $0.id == id && $0.isTrashed != true }
+        }
+    }
+
+    var spatialOrganizerClips: [SavedClip] {
+        organizedClipIDs.compactMap { id in
+            clips.first { $0.id == id && $0.isTrashed != true }
+        }
+    }
+
+    var spatialOrganizerArea: CanvasArea? {
+        guard let id = organizerAreaID else { return nil }
+        return areas.first { $0.id == id && $0.isTrashed != true }
+    }
+
+    @discardableResult
+    func stashSelectedInk() -> Bool {
+        guard selectionActive, let clip = latestClip,
+              clips.contains(where: { $0.id == clip.id && $0.isTrashed != true })
+        else { return false }
+        // The preview move temporarily removes ink. Restore that exact drawing.
+        // Stashing saves a REFERENCE only, so it cannot destroy source strokes.
+        cancelSelectionDrag()
+        if !stashedClipIDs.contains(clip.id) { stashedClipIDs.append(clip.id) }
+        selectedIndices = []
+        selectionActive = false
+        saveIndex()
+        status = "Ink stashed as tiny clip · original strokes preserved"
+        return true
+    }
+
+    func removeFromStash(_ id: UUID) {
+        stashedClipIDs.removeAll { $0 == id }
+        saveIndex()
+    }
+
+    @discardableResult
+    func addToSpatialOrganizer(_ id: UUID) -> Bool {
+        guard clips.contains(where: { $0.id == id && $0.isTrashed != true }) else { return false }
+        if !organizedClipIDs.contains(id) { organizedClipIDs.append(id) }
+        if spatialOrganizerArea == nil {
+            let anchor = worldCenter()
+            let area = CanvasArea(id: UUID(), title: "Organized study clips",
+                x: Double(anchor.x + 9000), y: Double(anchor.y + 9000),
+                width: 2800, height: 1800)
+            areas.append(area)
+            organizerAreaID = area.id
+        }
+        stashedClipIDs.removeAll { $0 == id }
+        saveIndex()
+        status = "Saved to spatial organizer · ink untouched"
+        return true
+    }
+
+    func openSpatialOrganizer() {
+        guard let area = spatialOrganizerArea else {
+            status = "Drag a clip to Organize to create your collection"
+            return
+        }
+        goToArea(area)
+    }
+
+    func studyPrompt(for clip: SavedClip) -> String {
+        let subject = clip.course ?? "my current course"
+        let ocr = clip.recognizedText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return """
+        LEARNING MODE — I am studying material from \(subject).
+        The attached handwriting is the primary source. OCR is fallible: \(ocr.isEmpty ? "Please read the image directly." : ocr)
+        Use my connected Google Drive course readings or notes where available to ground and cross-check explanations; if they are not accessible in this chat, say so rather than guessing.
+        Begin by explaining the selected concept, then quiz me with one multiple-choice question at a time, wait for my answer, and target misconceptions using retrieval practice.
+        """
+    }
+
     func clipURL(_ clip: SavedClip) -> URL { clipsFolder.appendingPathComponent(clip.imageName) }
     func clipImage(_ clip: SavedClip) -> UIImage? { UIImage(contentsOfFile: clipURL(clip).path) }
     func copyClip(_ clip: SavedClip) {
@@ -1018,6 +1121,18 @@ final class CanvasStore: ObservableObject {
     func goToClip(_ clip: SavedClip) {
         guard let x = clip.sourceX, let y = clip.sourceY, let view = canvas else { return }
         goToWorld(CGPoint(x: x, y: y), in: view)
+    }
+
+    /// Jump to the most recently committed ink on the current canvas.
+    /// No stored index required: recovery, erasing and undo remain consistent.
+    func goToLastInk() {
+        guard let view = canvas, let last = view.drawing.strokes.last else {
+            status = "No handwriting on this canvas yet"
+            return
+        }
+        let bounds = last.renderBounds
+        goToWorld(CGPoint(x: bounds.midX, y: bounds.midY), in: view)
+        status = "Jumped to most recent ink"
     }
 
     func makeAreaFromSelection() {
@@ -1185,6 +1300,9 @@ final class CanvasStore: ObservableObject {
             areas = backup.index.areas
             textNotes = backup.index.textNotes ?? []
             clips = backup.index.clips
+            stashedClipIDs = backup.index.stashedClipIDs ?? []
+            organizedClipIDs = backup.index.organizedClipIDs ?? []
+            organizerAreaID = backup.index.organizerAreaID
             paper = backup.index.paper ?? .blank
             loading = true; canvas?.drawing = restored; loading = false
             try backup.drawing.write(to: drawingFile, options: .atomic)
