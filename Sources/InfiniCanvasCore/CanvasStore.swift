@@ -131,7 +131,13 @@ struct CompleteBackup: Codable {
 
 @MainActor
 final class CanvasStore: ObservableObject {
-    @Published var tool: CanvasTool = .pen { didSet { updateTool() } }
+    @Published var tool: CanvasTool = .pen {
+        didSet {
+            // Lasso selection belongs to the lasso overlay, not the next pen/eraser.
+            if oldValue == .capture && tool != .capture { clearSelection() }
+            updateTool()
+        }
+    }
     @Published var inkColor = UIColor(red: 0.10, green: 0.16, blue: 0.20, alpha: 1) { didSet { updateTool() } }
     @Published var strokeWidth: CGFloat = 2.5 { didSet { updateTool() } }
     @Published var penProfile: PenProfile = .fluid {
@@ -186,6 +192,7 @@ final class CanvasStore: ObservableObject {
     private var pinchStartingDistance: CGFloat = 1
     private var pinchStartingZoom: CGFloat = 1
     private var panStartingOffset: CGPoint = .zero
+    private var panStartingTranslation: CGPoint = .zero
     private var editUndo: [PKDrawing] = []
     private var editRedo: [PKDrawing] = []
     private var saveWork: DispatchWorkItem?
@@ -442,13 +449,29 @@ final class CanvasStore: ObservableObject {
     // here instead of blocking it. RestSafe still forbids finger panning.
     func handleLassoPan(_ recognizer: UIPanGestureRecognizer, in host: UIView) {
         guard let view = canvas, !restSafe else { return }
+        let translation = recognizer.translation(in: host)
+        // Two recognizers can run simultaneously. Pinch owns zoom, and panning
+        // must not also offset the canvas while the fingers spread.
+        let pinching = host.gestureRecognizers?.contains(where: {
+            guard let gesture = $0 as? UIPinchGestureRecognizer else { return false }
+            return gesture.state == .began || gesture.state == .changed
+        }) ?? false
         switch recognizer.state {
         case .began:
             panStartingOffset = view.contentOffset
+            panStartingTranslation = translation
         case .changed:
-            let translation = recognizer.translation(in: host)
-            view.setContentOffset(CGPoint(x: panStartingOffset.x - translation.x,
-                                          y: panStartingOffset.y - translation.y), animated: false)
+            if pinching {
+                // Resume from the current zoomed viewport without applying
+                // all of the translation that accumulated during the pinch.
+                panStartingOffset = view.contentOffset
+                panStartingTranslation = translation
+                return
+            }
+            let delta = CGPoint(x: translation.x - panStartingTranslation.x,
+                                y: translation.y - panStartingTranslation.y)
+            view.setContentOffset(CGPoint(x: panStartingOffset.x - delta.x,
+                                          y: panStartingOffset.y - delta.y), animated: false)
             refreshViewport()
         case .ended, .cancelled, .failed:
             saveViewPosition()
