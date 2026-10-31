@@ -125,11 +125,19 @@ struct CompleteBackup: Codable {
     var clipImages: [String: Data]
     var clipDrawings: [String: Data]
     var audioFiles: [String: Data]? = nil
+    // Optional for compatibility with older exports that predate Art Studio backups.
+    var artworkData: Data? = nil
 }
 
 @MainActor
 final class CanvasStore: ObservableObject {
-    @Published var tool: CanvasTool = .pen { didSet { updateTool() } }
+    @Published var tool: CanvasTool = .pen {
+        didSet {
+            // Lasso selection belongs to the lasso overlay, not the next pen/eraser.
+            if oldValue == .capture && tool != .capture { clearSelection() }
+            updateTool()
+        }
+    }
     @Published var inkColor = UIColor(red: 0.10, green: 0.16, blue: 0.20, alpha: 1) { didSet { updateTool() } }
     @Published var strokeWidth: CGFloat = 2.5 { didSet { updateTool() } }
     @Published var penProfile: PenProfile = .fluid {
@@ -184,6 +192,7 @@ final class CanvasStore: ObservableObject {
     private var pinchStartingDistance: CGFloat = 1
     private var pinchStartingZoom: CGFloat = 1
     private var panStartingOffset: CGPoint = .zero
+    private var panStartingTranslation: CGPoint = .zero
     private var editUndo: [PKDrawing] = []
     private var editRedo: [PKDrawing] = []
     private var saveWork: DispatchWorkItem?
@@ -336,21 +345,24 @@ final class CanvasStore: ObservableObject {
 
     private func drawingPoint(_ point: CGPoint, from overlay: UIView, in view: PKCanvasView) -> CGPoint? {
         guard let viewport = viewportPoint(point, from: overlay, in: view) else { return nil }
-        let z = max(view.zoomScale, 0.0001)
-        return CGPoint(x: (view.contentOffset.x + viewport.x) / z,
-                       y: (view.contentOffset.y + viewport.y) / z)
+        return CanvasGeometry.drawingPoint(viewport: viewport,
+                                           offset: view.contentOffset,
+                                           scale: view.zoomScale)
     }
 
     private func zoomPreservingAnchor(_ requestedScale: CGFloat, at viewport: CGPoint, in view: PKCanvasView) {
         let originalZoom = max(view.zoomScale, 0.0001)
-        let anchor = CGPoint(x: (view.contentOffset.x + viewport.x) / originalZoom,
-                             y: (view.contentOffset.y + viewport.y) / originalZoom)
+        let originalOffset = view.contentOffset
         let newScale = min(view.maximumZoomScale, max(view.minimumZoomScale, requestedScale))
         guard abs(newScale - originalZoom) > 0.000001 else { return }
         view.setZoomScale(newScale, animated: false)
-        let actual = view.zoomScale
-        view.setContentOffset(CGPoint(x: anchor.x * actual - viewport.x,
-                                      y: anchor.y * actual - viewport.y), animated: false)
+        let nextOffset = CanvasGeometry.offsetPreservingAnchor(
+            originalOffset: originalOffset,
+            originalZoom: originalZoom,
+            targetZoom: view.zoomScale,
+            viewportAnchor: viewport
+        )
+        view.setContentOffset(nextOffset, animated: false)
         refreshViewport()
     }
 
@@ -437,13 +449,29 @@ final class CanvasStore: ObservableObject {
     // here instead of blocking it. RestSafe still forbids finger panning.
     func handleLassoPan(_ recognizer: UIPanGestureRecognizer, in host: UIView) {
         guard let view = canvas, !restSafe else { return }
+        let translation = recognizer.translation(in: host)
+        // Two recognizers can run simultaneously. Pinch owns zoom, and panning
+        // must not also offset the canvas while the fingers spread.
+        let pinching = host.gestureRecognizers?.contains(where: {
+            guard let gesture = $0 as? UIPinchGestureRecognizer else { return false }
+            return gesture.state == .began || gesture.state == .changed
+        }) ?? false
         switch recognizer.state {
         case .began:
             panStartingOffset = view.contentOffset
+            panStartingTranslation = translation
         case .changed:
-            let translation = recognizer.translation(in: host)
-            view.setContentOffset(CGPoint(x: panStartingOffset.x - translation.x,
-                                          y: panStartingOffset.y - translation.y), animated: false)
+            if pinching {
+                // Resume from the current zoomed viewport without applying
+                // all of the translation that accumulated during the pinch.
+                panStartingOffset = view.contentOffset
+                panStartingTranslation = translation
+                return
+            }
+            let delta = CGPoint(x: translation.x - panStartingTranslation.x,
+                                y: translation.y - panStartingTranslation.y)
+            view.setContentOffset(CGPoint(x: panStartingOffset.x - delta.x,
+                                          y: panStartingOffset.y - delta.y), animated: false)
             refreshViewport()
         case .ended, .cancelled, .failed:
             saveViewPosition()
@@ -498,7 +526,7 @@ final class CanvasStore: ObservableObject {
                        y: (view.contentOffset.y + view.bounds.height / 2) / max(view.zoomScale, 0.01))
     }
     func screenPoint(for area: CanvasArea) -> CGPoint {
-        CGPoint(x: CGFloat(area.x) * zoom - offset.x, y: CGFloat(area.y) * zoom - offset.y)
+        CanvasGeometry.viewportPoint(drawing: CGPoint(x: area.x, y: area.y), offset: offset, scale: zoom)
     }
     func zoomToOverview() {
         guard let view = canvas else { return }
@@ -544,8 +572,10 @@ final class CanvasStore: ObservableObject {
             // Atomic write first; the recovery file is always from an earlier known good save.
             if FileManager.default.fileExists(atPath: drawingFile.path) {
                 createPeriodicRevisionIfNeeded()
-                try? FileManager.default.removeItem(at: recoveryFile)
-                try? FileManager.default.copyItem(at: drawingFile, to: recoveryFile)
+                // Atomically replace recovery from a known-good drawing. Never
+                // erase the prior recovery copy before the new copy is secured.
+                let previous = try Data(contentsOf: drawingFile)
+                try previous.write(to: recoveryFile, options: .atomic)
             }
             try data.write(to: drawingFile, options: [.atomic, .completeFileProtectionUnlessOpen])
             try persistIndex()
@@ -620,9 +650,12 @@ final class CanvasStore: ObservableObject {
                 audio[lecture.audioFile] = data
             }
         }
+        let artFile = directory.appendingPathComponent("Artwork", isDirectory: true)
+            .appendingPathComponent("artwork.json")
+        let artwork = try? Data(contentsOf: artFile)
         return CompleteBackup(format: "infini-canvas-native-v5", exportedAt: .now,
             drawing: drawingData, index: currentIndex(), clipImages: pngs,
-            clipDrawings: vectors, audioFiles: audio)
+            clipDrawings: vectors, audioFiles: audio, artworkData: artwork)
     }
 
     private func createAutomaticBackupIfNeeded(drawingData: Data) {
@@ -1120,6 +1153,10 @@ final class CanvasStore: ObservableObject {
             guard ["infini-canvas-native-v4", "infini-canvas-native-v5"].contains(backup.format)
                 else { status = "Unknown backup format"; return false }
             let restored = try PKDrawing(data: backup.drawing)
+            // Check optional art-document bytes before changing any current files.
+            if let art = backup.artworkData {
+                _ = try JSONDecoder().decode(ArtworkDocument.self, from: art)
+            }
             // Preserve the current drawing as a rollback file before applying an import.
             if let current = canvas?.drawing.dataRepresentation() {
                 try current.write(to: recoveryFile, options: .atomic)
@@ -1141,6 +1178,12 @@ final class CanvasStore: ObservableObject {
             loading = true; canvas?.drawing = restored; loading = false
             try backup.drawing.write(to: drawingFile, options: .atomic)
             try persistIndex()
+            if let art = backup.artworkData {
+                let artFolder = directory.appendingPathComponent("Artwork", isDirectory: true)
+                try FileManager.default.createDirectory(at: artFolder, withIntermediateDirectories: true)
+                let artFile = artFolder.appendingPathComponent("artwork.json")
+                try art.write(to: artFile, options: .atomic)
+            }
             isSaved = true; status = "Complete backup restored"
             return true
         } catch { status = "Backup import failed: \(error.localizedDescription)"; return false }

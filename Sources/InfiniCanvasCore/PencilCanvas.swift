@@ -50,8 +50,10 @@ struct PencilCanvas: UIViewRepresentable {
         init(store: CanvasStore) { self.store = store }
 
         @objc func handleDeliberatePinch(_ recognizer: UIPinchGestureRecognizer) {
-            // UI updates are serialized on the main actor.
-            Task { @MainActor [weak store] in
+            // UIKit touch callbacks run on the main thread. Never defer the mutable
+            // recognizer to a Task: its state may already be .ended by execution.
+            // The same frame must update the view anchor and scroll offset.
+            MainActor.assumeIsolated {
                 guard let store, store.restSafe, let host = recognizer.view else { return }
                 store.handleFingerPinch(recognizer, in: host)
             }
@@ -60,14 +62,17 @@ struct PencilCanvas: UIViewRepresentable {
             touch.type == .direct
         }
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
-            if store?.isProgrammaticDrawingUpdate == true { return }
-            Task { @MainActor [weak store] in store?.drawingChanged() }
+            // Keep ordering with synchronous layer and lasso drawing mutations.
+            MainActor.assumeIsolated {
+                guard let store, !store.isProgrammaticDrawingUpdate else { return }
+                store.drawingChanged()
+            }
         }
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
-            DispatchQueue.main.async { [weak store] in store?.refreshViewport() }
+            MainActor.assumeIsolated { store?.refreshViewport() }
         }
         func scrollViewDidZoom(_ scrollView: UIScrollView) {
-            DispatchQueue.main.async { [weak store] in store?.refreshViewport() }
+            MainActor.assumeIsolated { store?.refreshViewport() }
         }
 
     }
@@ -186,30 +191,49 @@ final class LassoTouchView: UIView, UIGestureRecognizerDelegate {
         }
     }
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard let location = touches.first(where: { $0.type == .pencil })?.location(in: self) else { return }
+        guard let pencil = touches.first(where: { $0.type == .pencil }) else { return }
         if moving {
+            let location = pencil.location(in: self)
             let dx = location.x - beginning.x
             let dy = location.y - beginning.y
-            // Cached PNG moves with the Pencil; vector ink is committed only once at lift.
             selectedPreview?.transform = CGAffineTransform(translationX: dx, y: dy)
-            let stepX = location.x - lastPoint.x, stepY = location.y - lastPoint.y
+            let stepX = location.x - lastPoint.x
+            let stepY = location.y - lastPoint.y
             points = points.map { CGPoint(x: $0.x + stepX, y: $0.y + stepY) }
-        } else if hypot(location.x - lastPoint.x, location.y - lastPoint.y) > 2 {
-            points.append(location)
+            lastPoint = location
+        } else {
+            // Preserve coalesced Pencil points at speed, rather than sampling one
+            // position per display frame and accidentally cutting lasso corners.
+            for sample in event?.coalescedTouches(for: pencil) ?? [pencil] {
+                let location = sample.location(in: self)
+                if hypot(location.x - lastPoint.x, location.y - lastPoint.y) > 1.25 {
+                    points.append(location)
+                    lastPoint = location
+                }
+            }
         }
-        lastPoint = location
         redraw()
     }
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard touches.contains(where: { $0.type == .pencil }) else { return }
+        guard let pencil = touches.first(where: { $0.type == .pencil }) else { return }
+        let ending = pencil.location(in: self)
         if moving {
-            onFinishMove?(CGSize(width: lastPoint.x - beginning.x, height: lastPoint.y - beginning.y))
+            // Include the Pencil's final travel since the last moved event.
+            let stepX = ending.x - lastPoint.x
+            let stepY = ending.y - lastPoint.y
+            points = points.map { CGPoint(x: $0.x + stepX, y: $0.y + stepY) }
+            onFinishMove?(CGSize(width: ending.x - beginning.x, height: ending.y - beginning.y))
             selectedPreview?.removeFromSuperview()
             selectedPreview = nil
             hasOutline = true
-        } else if points.count >= 4 {
-            hasOutline = true; redraw(); onComplete?(points, self)
-        } else { resetOutline() }
+        } else {
+            if hypot(ending.x - lastPoint.x, ending.y - lastPoint.y) > 1.25 {
+                points.append(ending)
+            }
+            if points.count >= 4 {
+                hasOutline = true; redraw(); onComplete?(points, self)
+            } else { resetOutline() }
+        }
         moving = false
     }
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { resetOutline() }

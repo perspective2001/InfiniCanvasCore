@@ -20,10 +20,11 @@ struct ArtworkDocument: Codable {
 }
 
 enum ArtBrush: String, CaseIterable, Identifiable {
-    case fountain = "Fountain", pencil = "Pencil", monoline = "Monoline", watercolor = "Watercolor", crayon = "Crayon", marker = "Marker", eraser = "Eraser"
+    case pen = "Pen", fountain = "Fountain", pencil = "Pencil", monoline = "Monoline", watercolor = "Watercolor", crayon = "Crayon", marker = "Marker", eraser = "Eraser"
     var id: String { rawValue }
     var icon: String {
         switch self {
+        case .pen: return "pencil.tip"
         case .fountain: return "pencil.tip.crop.circle"
         case .pencil: return "pencil"
         case .monoline: return "line.diagonal"
@@ -35,6 +36,7 @@ enum ArtBrush: String, CaseIterable, Identifiable {
     }
     func pkTool(color: UIColor, width: CGFloat) -> any PKTool {
         switch self {
+        case .pen: return PKInkingTool(.pen, color: color, width: width)
         case .fountain: return PKInkingTool(.fountainPen, color: color, width: width)
         case .pencil: return PKInkingTool(.pencil, color: color, width: width)
         case .monoline: return PKInkingTool(.monoline, color: color, width: width)
@@ -50,7 +52,7 @@ enum ArtBrush: String, CaseIterable, Identifiable {
 final class ArtworkStore: ObservableObject {
     @Published var layers: [ArtworkLayer]
     @Published var selectedLayerID: UUID
-    @Published var brush: ArtBrush = .fountain
+    @Published var brush: ArtBrush = .pen
     @Published var brushSize: CGFloat = 4
     @Published var brushColor: UIColor = .black
     @Published var restSafe = true
@@ -59,6 +61,9 @@ final class ArtworkStore: ObservableObject {
     weak var canvasHost: LayeredArtworkHost?
 
     private var saveJob: DispatchWorkItem?
+    // Keep recent PencilKit drawings in memory; serialize once after a stroke,
+    // instead of converting every touch update into a complete Data blob.
+    private var pendingDrawings: [UUID: PKDrawing] = [:]
     private let fileURL: URL
     private let artworkDirectory: URL
 
@@ -86,8 +91,8 @@ final class ArtworkStore: ObservableObject {
     }
 
     func drawingChanged(_ newDrawing: PKDrawing, for id: UUID) {
-        guard let i = layers.firstIndex(where: { $0.id == id }) else { return }
-        layers[i].drawing = newDrawing.dataRepresentation()
+        guard layers.contains(where: { $0.id == id }) else { return }
+        pendingDrawings[id] = newDrawing
         scheduleSave()
     }
     private func scheduleSave() {
@@ -98,6 +103,16 @@ final class ArtworkStore: ObservableObject {
     }
     func saveNow() {
         saveJob?.cancel()
+        // Flush all dirty layers before making a snapshot or exporting a PNG.
+        // Data conversion at Pencil event frequency caused avoidable latency.
+        if !pendingDrawings.isEmpty {
+            for (id, drawing) in pendingDrawings {
+                if let index = layers.firstIndex(where: { $0.id == id }) {
+                    layers[index].drawing = drawing.dataRepresentation()
+                }
+            }
+            pendingDrawings.removeAll()
+        }
         do {
             let model = ArtworkDocument(layers: layers, selected: selectedLayerID)
             try JSONEncoder().encode(model).write(to: fileURL, options: .atomic)
@@ -112,8 +127,11 @@ final class ArtworkStore: ObservableObject {
     }
     func removeLayer(_ id: UUID) {
         guard layers.count > 1 else { status = "Keep at least one layer"; return }
+        pendingDrawings.removeValue(forKey: id)
         layers.removeAll { $0.id == id }
-        if selectedLayerID == id { selectedLayerID = layers.last!.id }
+        if selectedLayerID == id {
+            selectedLayerID = layers.first(where: { !$0.isLocked && $0.isVisible })?.id ?? layers.last!.id
+        }
         saveNow()
     }
     func moveLayer(from offsets: IndexSet, to destination: Int) {
@@ -121,6 +139,8 @@ final class ArtworkStore: ObservableObject {
         saveNow()
     }
     func duplicateLayer(_ id: UUID) {
+        // Make sure the duplicate contains the current visible strokes.
+        saveNow()
         guard let index = layers.firstIndex(where: { $0.id == id }) else { return }
         var copy = layers[index]
         copy.id = UUID()
@@ -139,6 +159,10 @@ final class ArtworkStore: ObservableObject {
         if let opacity { layers[index].opacity = opacity }
         if let isVisible { layers[index].isVisible = isVisible }
         if let isLocked { layers[index].isLocked = isLocked }
+        if id == selectedLayerID && (layers[index].isLocked || !layers[index].isVisible),
+           let next = layers.first(where: { !$0.isLocked && $0.isVisible }) {
+            selectedLayerID = next.id
+        }
         saveNow()
     }
     func undo() { canvasHost?.activeCanvas?.undoManager?.undo() }
@@ -165,6 +189,7 @@ final class ArtworkStore: ObservableObject {
 
 struct ArtStudioView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var art = ArtworkStore()
     @State private var showLayers = true
     @State private var shareURL: URL?
@@ -234,6 +259,9 @@ struct ArtStudioView: View {
             .background(.regularMaterial)
         }
         .onDisappear { art.saveNow() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background { art.saveNow() }
+        }
         .sheet(isPresented: $showShare) {
             if let shareURL { SystemShareSheet(items: [shareURL]) }
         }
@@ -325,11 +353,12 @@ struct LayeredArtworkCanvas: UIViewRepresentable {
         var suppress = false
         init(art: ArtworkStore) { self.art = art }
         func canvasViewDrawingDidChange(_ view: PKCanvasView) {
-            guard !suppress, let host,
-                  let layerID = host.canvasToLayer[ObjectIdentifier(view)] else { return }
-            let drawing = view.drawing
-            Task { @MainActor [weak art] in
-                art?.drawingChanged(drawing, for: layerID)
+            // Preserve input ordering. A delayed Task could save old strokes
+            // after a layer switch or after the app starts backgrounding.
+            MainActor.assumeIsolated {
+                guard !suppress, let host,
+                      let layerID = host.canvasToLayer[ObjectIdentifier(view)] else { return }
+                art?.drawingChanged(view.drawing, for: layerID)
             }
         }
         func scrollViewDidScroll(_ view: UIScrollView) { host?.syncViewport(from: view) }

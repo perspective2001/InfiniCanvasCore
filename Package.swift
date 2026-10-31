@@ -8,6 +8,7 @@ let package = Package(
         .library(name: "InfiniCanvasCore", targets: ["InfiniCanvasCore"])
     ],
     targets: [
-        .target(name: "InfiniCanvasCore", path: "Sources/InfiniCanvasCore")
+        .target(name: "InfiniCanvasCore", path: "Sources/InfiniCanvasCore"),
+        .testTarget(name: "InfiniCanvasCoreTests", dependencies: ["InfiniCanvasCore"], path: "Tests/InfiniCanvasCoreTests")
     ]
 )
