@@ -9,9 +9,11 @@ on:
       - 'IntegrationHost/**'
       - 'Package.swift'
       - '.github/workflows/validate-apple-sdk.yml'
+      - 'Scripts/preflight_contract.py'
   pull_request:
     branches: [main]
     paths:
+      - 'Scripts/preflight_contract.py'
       - 'Sources/**'
       - 'Tests/**'
       - 'IntegrationHost/**'
@@ -27,7 +29,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  preflight:
+    name: Cheap source and app identity checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Verify host identity and local-package wiring before Mac builds
+        run: python3 Scripts/preflight_contract.py
+
   current-playgrounds-sdk:
+    needs: preflight
     # Swift Playground 4.7's published SDK is iOS 26. Test the compiler family
     # user's actual iPad editor can use, not only future Xcode 27 SDKs.
     name: Existing iPad Playground SDK and PencilKit tests
@@ -57,6 +71,7 @@ jobs:
           xcodebuild -scheme InfiniCanvasCore -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath /tmp/InfiniCoreTests26 CODE_SIGNING_ALLOWED=NO test
 
   modern-sdk-and-host:
+    needs: preflight
     name: Xcode 27 actual Swift Playgrounds host integration
     runs-on: xcode-27
     timeout-minutes: 12
