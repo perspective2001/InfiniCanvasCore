@@ -78,4 +78,36 @@ final class CanvasCoreTests: XCTestCase {
             XCTAssertEqual(store.latestClip?.strokeCount, 3)
         }
     }
+    func testPencilOnlyCanvasOneFingerScrollAndNativeZoomLimit() {
+        let store = CanvasStore()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
+        let canvas = PKCanvasView(frame: window.bounds)
+        canvas.minimumZoomScale = 0.045
+        canvas.maximumZoomScale = 10
+        // Use a moderate canvas for zoom API verification; 100k world performance
+        // is a separate stress test and should not hold the whole release gate.
+        canvas.contentSize = CGSize(width: 12000, height: 12000)
+        window.addSubview(canvas)
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+        store.attach(canvas)
+
+        XCTAssertEqual(canvas.drawingPolicy, .pencilOnly)
+        XCTAssertTrue(canvas.isScrollEnabled, "One-finger scrolling must not be disabled by RestSafe")
+        XCTAssertTrue(canvas.panGestureRecognizer.isEnabled)
+        XCTAssertEqual(canvas.panGestureRecognizer.minimumNumberOfTouches, 1)
+        XCTAssertTrue(canvas.pinchGestureRecognizer?.isEnabled == true)
+
+        store.zoomTo(10)
+        XCTAssertEqual(canvas.zoomScale, 10, accuracy: 0.01, "PencilKit must reach its native 1000% maximum")
+        store.zoomTo(24)
+        XCTAssertEqual(canvas.zoomScale, 10, accuracy: 0.01, "Native PencilKit zoom must safely clamp at 1000%")
+        store.tool = .capture
+        XCTAssertFalse(canvas.panGestureRecognizer.isEnabled, "Lasso overlay owns finger navigation")
+        XCTAssertFalse(canvas.pinchGestureRecognizer?.isEnabled ?? true, "Lasso overlay owns pinch zoom")
+        store.tool = .pen
+        XCTAssertTrue(canvas.panGestureRecognizer.isEnabled)
+        XCTAssertTrue(canvas.pinchGestureRecognizer?.isEnabled ?? false)
+    }
+
 }

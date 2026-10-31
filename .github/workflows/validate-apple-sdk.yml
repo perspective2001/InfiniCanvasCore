@@ -19,12 +19,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: qa-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  group: qa-repaired-zoom-${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
   compile:
     runs-on: macos-15
+    timeout-minutes: 10
     steps:
       - name: Check out source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -67,6 +68,7 @@ jobs:
           set -o pipefail
           xcodebuild -scheme InfiniCanvasCore -destination 'generic/platform=iOS Simulator' -derivedDataPath /tmp/InfiniCanvasBuild CODE_SIGNING_ALLOWED=NO build 2>&1 | tee /tmp/infini-build.log
       - name: Run native PencilKit regression tests
+        timeout-minutes: 4
         run: |
           set -euo pipefail
           SIMULATOR_ID="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; all=[x for a in d.values() for x in a if x.get("isAvailable",True)]; pick=next((x for x in all if "iPad" in x["name"]), next((x for x in all if "iPhone" in x["name"]), None)); print(pick["udid"] if pick else "")')"

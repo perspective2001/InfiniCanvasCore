@@ -187,10 +187,9 @@ final class CanvasStore: ObservableObject {
     private var dragSelected: [PKStroke] = []
     private var dragRemaining: [PKStroke] = []
     private var dragBounds: CGRect = .zero
-    private var pinchInitialDistance: CGFloat = 0
     private var pinchActivated = false
-    private var pinchStartingDistance: CGFloat = 1
     private var pinchStartingZoom: CGFloat = 1
+    private var pinchWorldAnchor: CGPoint = .zero
     private var panStartingOffset: CGPoint = .zero
     private var panStartingTranslation: CGPoint = .zero
     private var editUndo: [PKDrawing] = []
@@ -300,19 +299,28 @@ final class CanvasStore: ObservableObject {
     func applyPalmProtection() {
         guard let view = canvas else { return }
         view.drawingPolicy = .pencilOnly
-        view.isScrollEnabled = !restSafe
-        // Native panning is locked while writing. A separate two-finger recognizer
-        // allows intentional wide-spread zoom even in RestSafe, on every tool.
-        view.panGestureRecognizer.minimumNumberOfTouches = 2
-        view.panGestureRecognizer.isEnabled = !restSafe && tool != .capture
-        view.pinchGestureRecognizer?.isEnabled = !restSafe && tool != .capture
-        status = restSafe ? "RestSafe · wide two-finger spread to zoom" : "Navigate · two fingers to pan and pinch"
+        // PencilKit's native finger navigation requires scrolling ENABLED.
+        // Pencil-only drawing rejects finger/palm ink. The system handles
+        // single-finger scrolling and two-finger pinch on the main canvas.
+        view.isScrollEnabled = true
+        view.panGestureRecognizer.minimumNumberOfTouches = 1
+        // RestSafe constrains panning to a deliberate single finger; when off,
+        // Navigate also permits two-finger panning. Native pinch remains enabled.
+        view.panGestureRecognizer.maximumNumberOfTouches = restSafe ? 1 : 2
+        configureNavigationRecognizers(view)
+        status = restSafe ? "RestSafe · one finger pans · two fingers zoom" :
+                            "Navigate · one/two fingers pan · pinch to zoom"
+    }
+
+    private func configureNavigationRecognizers(_ view: PKCanvasView) {
+        let coveredByOverlay = tool == .capture || (tool == .marker && fixedHighlighter)
+        view.panGestureRecognizer.isEnabled = !coveredByOverlay
+        view.pinchGestureRecognizer?.isEnabled = !coveredByOverlay
     }
 
     func updateTool() {
         guard let view = canvas else { return }
-        view.panGestureRecognizer.isEnabled = !restSafe && tool != .capture
-        view.pinchGestureRecognizer?.isEnabled = !restSafe && tool != .capture
+        configureNavigationRecognizers(view)
         switch tool {
         case .pen:
             let inkType: PKInkingTool.InkType
@@ -404,51 +412,48 @@ final class CanvasStore: ObservableObject {
         status = "Vertical marker saved as editable ink"
     }
 
-    // Pinch handling deliberately excludes Apple Pencil touches. In RestSafe,
-    // a large starting separation AND >= 35pt additional spread are required.
-    // Lasso uses this same handler because its overlay intercepts the canvas pinch.
+    // Custom pinch is only used over full-screen Pencil overlays.
+    // Main canvas uses native UIScrollView zoom, never competing recognizers.
     func handleFingerPinch(_ recognizer: UIPinchGestureRecognizer, in host: UIView) {
         guard let view = canvas else { return }
-        if recognizer.state == .began {
-            pinchInitialDistance = 0
+        switch recognizer.state {
+        case .began:
             pinchActivated = false
-            return
-        }
-        if recognizer.state == .ended || recognizer.state == .cancelled || recognizer.state == .failed {
-            pinchActivated = false
-            pinchInitialDistance = 0
-            saveViewPosition()
-            return
-        }
-        guard recognizer.numberOfTouches >= 2 else { return }
-        let first = recognizer.location(ofTouch: 0, in: host)
-        let second = recognizer.location(ofTouch: 1, in: host)
-        let separation = hypot(first.x - second.x, first.y - second.y)
-        if pinchInitialDistance == 0 { pinchInitialDistance = separation }
-        if recognizer.state == .changed {
+            pinchStartingZoom = view.zoomScale
+            let midpoint = recognizer.location(in: host)
+            guard let viewport = viewportPoint(midpoint, from: host, in: view) else { return }
+            pinchWorldAnchor = CanvasGeometry.drawingPoint(
+                viewport: viewport, offset: view.contentOffset, scale: view.zoomScale)
+        case .changed:
+            guard recognizer.numberOfTouches >= 2 else { return }
             if !pinchActivated {
-                let minSeparation: CGFloat = restSafe ? 150 : 55
-                let extraMovement: CGFloat = restSafe ? 35 : 9
-                guard separation >= minSeparation,
-                      abs(separation - pinchInitialDistance) >= extraMovement else { return }
+                let a = recognizer.location(ofTouch: 0, in: host)
+                let b = recognizer.location(ofTouch: 1, in: host)
+                guard hypot(a.x - b.x, a.y - b.y) > 75,
+                      abs(recognizer.scale - 1) > 0.055 else { return }
                 pinchActivated = true
-                pinchStartingDistance = max(1, separation)
-                pinchStartingZoom = view.zoomScale
-                status = "Deliberate pinch recognized"
-                return
             }
-            let newZoom = min(view.maximumZoomScale, max(view.minimumZoomScale,
-                pinchStartingZoom * separation / max(1, pinchStartingDistance)))
-            let center = recognizer.location(in: host)
-            guard let viewport = viewportPoint(center, from: host, in: view) else { return }
-            zoomPreservingAnchor(newZoom, at: viewport, in: view)
+            guard let midpoint = viewportPoint(recognizer.location(in: host), from: host, in: view) else { return }
+            let requested = min(view.maximumZoomScale, max(view.minimumZoomScale,
+                                pinchStartingZoom * recognizer.scale))
+            view.setZoomScale(requested, animated: false)
+            let actual = view.zoomScale
+            view.setContentOffset(
+                CGPoint(x: pinchWorldAnchor.x * actual - midpoint.x,
+                        y: pinchWorldAnchor.y * actual - midpoint.y),
+                animated: false)
+            refreshViewport()
+        case .ended, .cancelled, .failed:
+            if pinchActivated { saveViewPosition() }
+            pinchActivated = false
+        default: break
         }
     }
 
     // When Lasso is on top of the canvas, its two-finger pan forwards navigation
     // here instead of blocking it. RestSafe still forbids finger panning.
     func handleLassoPan(_ recognizer: UIPanGestureRecognizer, in host: UIView) {
-        guard let view = canvas, !restSafe else { return }
+        guard let view = canvas else { return }
         let translation = recognizer.translation(in: host)
         // Two recognizers can run simultaneously. Pinch owns zoom, and panning
         // must not also offset the canvas while the fingers spread.
@@ -531,11 +536,17 @@ final class CanvasStore: ObservableObject {
     func zoomToOverview() {
         guard let view = canvas else { return }
         zoomPreservingAnchor(0.14, at: CGPoint(x: view.bounds.width / 2, y: view.bounds.height / 2), in: view)
-        status = "Overview · no notes moved · 4.5%–2400% available"
+        status = "Overview · native zoom 4.5%–1000% (extended zoom requires a separate renderer)"
     }
     func zoomToWriting() {
         guard let view = canvas else { return }
         zoomPreservingAnchor(1, at: CGPoint(x: view.bounds.width / 2, y: view.bounds.height / 2), in: view)
+    }
+    func zoomTo(_ scale: CGFloat) {
+        guard let view = canvas else { return }
+        zoomPreservingAnchor(scale, at: CGPoint(x: view.bounds.width / 2,
+                                               y: view.bounds.height / 2), in: view)
+        saveViewPosition()
     }
     func zoomBy(_ factor: CGFloat) {
         guard let view = canvas else { return }
