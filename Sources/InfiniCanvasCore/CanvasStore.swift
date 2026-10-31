@@ -754,9 +754,23 @@ final class CanvasStore: ObservableObject {
             let center = CGPoint(x: stroke.renderBounds.midX, y: stroke.renderBounds.midY)
             var inside = polygon.contains(center)
             if !inside {
-                let strideSize = max(1, stroke.path.count / 120)
-                for j in stride(from: 0, to: stroke.path.count, by: strideSize) {
-                    if polygon.contains(stroke.path[j].location.applying(stroke.transform)) { inside = true; break }
+                // A long handwriting stroke can cross a thin lasso but have
+                // its centre and all sampled endpoints outside the polygon.
+                // Include transformed stroke segments, not only sample points.
+                let step = max(1, stroke.path.count / 400)
+                var previous: CGPoint?
+                for j in stride(from: 0, to: stroke.path.count, by: step) {
+                    let point = stroke.path[j].location.applying(stroke.transform)
+                    if polygon.contains(point) ||
+                       (previous.map { CanvasGeometry.segmentCrossesPolygon($0, point, polygon: locations) } ?? false) {
+                        inside = true; break
+                    }
+                    previous = point
+                }
+                if !inside, let tail = stroke.path.last?.location.applying(stroke.transform),
+                   let last = previous {
+                    inside = polygon.contains(tail) ||
+                        CanvasGeometry.segmentCrossesPolygon(last, tail, polygon: locations)
                 }
             }
             if inside { indices.insert(i); selected.append(stroke) }
@@ -1018,6 +1032,18 @@ final class CanvasStore: ObservableObject {
     func goToClip(_ clip: SavedClip) {
         guard let x = clip.sourceX, let y = clip.sourceY, let view = canvas else { return }
         goToWorld(CGPoint(x: x, y: y), in: view)
+    }
+
+    /// Jump to the most recently committed ink on the current canvas.
+    /// No stored index required: recovery, erasing and undo remain consistent.
+    func goToLastInk() {
+        guard let view = canvas, let last = view.drawing.strokes.last else {
+            status = "No handwriting on this canvas yet"
+            return
+        }
+        let bounds = last.renderBounds
+        goToWorld(CGPoint(x: bounds.midX, y: bounds.midY), in: view)
+        status = "Jumped to most recent ink"
     }
 
     func makeAreaFromSelection() {
