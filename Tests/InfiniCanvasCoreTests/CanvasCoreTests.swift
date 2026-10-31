@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 import UIKit
 import PencilKit
 @testable import InfiniCanvasCore
@@ -108,6 +109,64 @@ final class CanvasCoreTests: XCTestCase {
         store.tool = .pen
         XCTAssertTrue(canvas.panGestureRecognizer.isEnabled)
         XCTAssertTrue(canvas.pinchGestureRecognizer?.isEnabled ?? false)
+    }
+
+    func testActualRootViewLaunchesWithVisibleControlsAndCanvas() async throws {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
+        let host = UIHostingController(rootView: InfiniCanvasRootView())
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        host.view.frame = window.bounds
+
+        // Allow SwiftUI and UIViewRepresentable to perform their real initial layout.
+        try await Task.sleep(for: .milliseconds(600))
+        window.layoutIfNeeded()
+        host.view.layoutIfNeeded()
+        XCTAssertFalse(host.view.isHidden)
+        XCTAssertGreaterThan(host.view.bounds.width, 600)
+        XCTAssertGreaterThan(host.view.bounds.height, 400)
+
+        func collectCanvas(_ view: UIView) -> [PKCanvasView] {
+            (view as? PKCanvasView).map { [$0] } ?? view.subviews.flatMap { collectCanvas($0) }
+        }
+        let canvases = collectCanvas(host.view)
+        XCTAssertEqual(canvases.count, 1, "The root app must create the actual single native drawing surface")
+        guard let canvas = canvases.first else { return }
+        XCTAssertGreaterThan(canvas.bounds.width, 600)
+        XCTAssertGreaterThan(canvas.bounds.height, 400)
+        XCTAssertEqual(canvas.drawingPolicy, .pencilOnly)
+        XCTAssertTrue(canvas.isScrollEnabled)
+
+        // A fully white root screen hides even the normally visible command bar.
+        // Sample a small thumbnail to catch blank-host regressions.
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 0.25
+        let renderer = UIGraphicsImageRenderer(size: window.bounds.size, format: format)
+        let snapshot = renderer.image { _ in
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        }
+        guard let cgImage = snapshot.cgImage, let data = cgImage.dataProvider?.data else {
+            XCTFail("App root did not produce a screenshot"); return
+        }
+        let bytes = CFDataGetBytePtr(data)!
+        let bytesPerPixel = max(1, cgImage.bitsPerPixel / 8)
+        let bpr = cgImage.bytesPerRow
+        let count = min(cgImage.height, 45)
+        var varied = false
+        for y in 0..<count where !varied {
+            for x in stride(from: 0, to: cgImage.width, by: 7) {
+                let k = y * bpr + x * bytesPerPixel
+                if bytesPerPixel >= 3 {
+                    let c0 = Int(bytes[k]); let c1 = Int(bytes[k+1]); let c2 = Int(bytes[k+2])
+                    if max(c0,c1,c2) - min(c0,c1,c2) > 14 ||
+                       (c0 < 160 && c1 < 160 && c2 < 160) {
+                        varied = true; break
+                    }
+                }
+            }
+        }
+        XCTAssertTrue(varied, "App upper controls appear blank/white in captured root screen")
+        window.isHidden = true
     }
 
 }
