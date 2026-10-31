@@ -13,25 +13,20 @@ struct PencilCanvas: UIViewRepresentable {
         view.backgroundColor = CanvasStore.paperBackground(store.paper)
         view.isOpaque = true
         view.drawingPolicy = .pencilOnly
-        view.isScrollEnabled = !store.restSafe
-        // Wide but finite range: 0.045x–24x. Real unbounded zoom needs tiled ink architecture.
+        // Native PencilKit draws only with Pencil; finger gestures navigate.
+        // Apple documents one-finger scrolling in pencil-only mode.
+        view.isScrollEnabled = true
         view.minimumZoomScale = 0.045
-        view.maximumZoomScale = 24
+        view.maximumZoomScale = 32
         view.bouncesZoom = false
         view.contentSize = CGSize(width: 100000, height: 100000)
         view.alwaysBounceVertical = false
         view.alwaysBounceHorizontal = false
         view.delegate = context.coordinator
-        view.panGestureRecognizer.minimumNumberOfTouches = 2
-        let deliberatePinch = UIPinchGestureRecognizer(target: context.coordinator,
-                                                     action: #selector(Coordinator.handleDeliberatePinch(_:)))
-        deliberatePinch.delegate = context.coordinator
-        deliberatePinch.cancelsTouchesInView = false
-        view.addGestureRecognizer(deliberatePinch)
-        // System pencil gesture; switch quickly between last writing tool and eraser.
-        // PencilKit handles Pencil drawing independently of UIPencilInteraction.
-        // The optional Pencil double-tap/squeeze interaction is disabled until
-        // we can test its SDK availability in Swift Playgrounds on-device.
+        view.panGestureRecognizer.minimumNumberOfTouches = 1
+        // Use the system's OWN pan and pinch recognizers on the canvas.
+        // Custom overlay recognizers are reserved for Lasso and fixed highlighter.
+        // Do not attach a second competing UIPinchGestureRecognizer here.
         store.attach(view)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak store] in
             store?.restoreViewPosition()
@@ -42,25 +37,13 @@ struct PencilCanvas: UIViewRepresentable {
     func updateUIView(_ uiView: PKCanvasView, context: Context) {
         // Important: no drawing assignment here; otherwise ongoing strokes may vanish.
         if uiView.delegate == nil { uiView.delegate = context.coordinator }
-        if uiView.isScrollEnabled == store.restSafe { store.applyPalmProtection() }
+        // Tool and drawing-policy changes are applied by CanvasStore. Avoid
+        // resetting scroll recognizers on every SwiftUI state update.
     }
 
-    final class Coordinator: NSObject, PKCanvasViewDelegate, UIGestureRecognizerDelegate {
+    final class Coordinator: NSObject, PKCanvasViewDelegate {
         private weak var store: CanvasStore?
         init(store: CanvasStore) { self.store = store }
-
-        @objc func handleDeliberatePinch(_ recognizer: UIPinchGestureRecognizer) {
-            // UIKit touch callbacks run on the main thread. Never defer the mutable
-            // recognizer to a Task: its state may already be .ended by execution.
-            // The same frame must update the view anchor and scroll offset.
-            MainActor.assumeIsolated {
-                guard let store, store.restSafe, let host = recognizer.view else { return }
-                store.handleFingerPinch(recognizer, in: host)
-            }
-        }
-        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-            touch.type == .direct
-        }
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
             // Keep ordering with synchronous layer and lasso drawing mutations.
             MainActor.assumeIsolated {
@@ -129,16 +112,17 @@ final class LassoTouchView: UIView, UIGestureRecognizerDelegate {
         pinch.cancelsTouchesInView = false
         addGestureRecognizer(pinch)
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handleFingerPan(_:)))
-        pan.minimumNumberOfTouches = 2
-        pan.maximumNumberOfTouches = 2
+        pan.minimumNumberOfTouches = 1
+        pan.maximumNumberOfTouches = 1
         pan.delegate = self
         pan.cancelsTouchesInView = false
         addGestureRecognizer(pan)
-        accessibilityLabel = "Lasso handwriting. Pencil moves selected ink live; two-finger gestures navigate."
+        accessibilityLabel = "Pencil lasso. Move selections with Pencil; one finger pans, two fingers zoom."
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-        touch.type == .direct
+        // Filter broad stationary palm contacts from custom overlay navigation.
+        touch.type == .direct && touch.majorRadius < 27
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
