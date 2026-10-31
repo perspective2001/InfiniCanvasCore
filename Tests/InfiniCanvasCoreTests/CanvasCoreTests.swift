@@ -163,6 +163,12 @@ final class CanvasCoreTests: XCTestCase {
     }
 
     func testActualRootViewLaunchesWithVisibleControlsAndCanvas() async throws {
+        // Apple Liquid Glass is drawn by the system compositor; CALayer.render
+        // produces a blank snapshot for glass-backed SwiftUI controls.
+        // Capture the same LIVE view/layout with a test-only solid material;
+        // Xcode 27 compiles the native shipping-glass branch separately.
+        setenv("INFINI_CANVAS_CI_SNAPSHOT", "1", 1)
+        defer { unsetenv("INFINI_CANVAS_CI_SNAPSHOT") }
         let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         let window = scene.map { UIWindow(windowScene: $0) } ??
                      UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
