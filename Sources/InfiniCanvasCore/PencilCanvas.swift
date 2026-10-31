@@ -50,8 +50,10 @@ struct PencilCanvas: UIViewRepresentable {
         init(store: CanvasStore) { self.store = store }
 
         @objc func handleDeliberatePinch(_ recognizer: UIPinchGestureRecognizer) {
-            // UI updates are serialized on the main actor.
-            Task { @MainActor [weak store] in
+            // UIKit touch callbacks run on the main thread. Never defer the mutable
+            // recognizer to a Task: its state may already be .ended by execution.
+            // The same frame must update the view anchor and scroll offset.
+            MainActor.assumeIsolated {
                 guard let store, store.restSafe, let host = recognizer.view else { return }
                 store.handleFingerPinch(recognizer, in: host)
             }
@@ -60,14 +62,17 @@ struct PencilCanvas: UIViewRepresentable {
             touch.type == .direct
         }
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
-            if store?.isProgrammaticDrawingUpdate == true { return }
-            Task { @MainActor [weak store] in store?.drawingChanged() }
+            // Keep ordering with synchronous layer and lasso drawing mutations.
+            MainActor.assumeIsolated {
+                guard let store, !store.isProgrammaticDrawingUpdate else { return }
+                store.drawingChanged()
+            }
         }
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
-            DispatchQueue.main.async { [weak store] in store?.refreshViewport() }
+            MainActor.assumeIsolated { store?.refreshViewport() }
         }
         func scrollViewDidZoom(_ scrollView: UIScrollView) {
-            DispatchQueue.main.async { [weak store] in store?.refreshViewport() }
+            MainActor.assumeIsolated { store?.refreshViewport() }
         }
 
     }
