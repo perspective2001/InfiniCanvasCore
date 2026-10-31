@@ -72,10 +72,28 @@ jobs:
         run: |
           set -euo pipefail
           xcodebuild -scheme InfiniCanvasCore -destination 'generic/platform=iOS Simulator' -derivedDataPath /tmp/InfiniCore27 CODE_SIGNING_ALLOWED=NO build
-      - name: Validate actual iPad app-host manifest against this PR's package
+      - name: Validate Playgrounds host identity and native app manifest
         run: |
           set -euo pipefail
-          cd IntegrationHost/InfiniCanvasPermanent.swiftpm
-          swift package dump-package > /tmp/infini-host-manifest.json
-          xcodebuild -list -json | tee /tmp/infini-host-schemes.json
-          xcodebuild -scheme 'Infini Canvas' -destination 'generic/platform=iOS Simulator' -derivedDataPath /tmp/InfiniHost27 CODE_SIGNING_ALLOWED=NO build
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('IntegrationHost/InfiniCanvasPermanent.swiftpm/Package.swift').read_text()
+          a=Path('IntegrationHost/InfiniCanvasPermanent.swiftpm/Sources/InfiniCanvasApp.swift').read_text()
+          project=Path('IntegrationHost/project.yml').read_text()
+          for required in ['import AppleProductTypes', 'com.perspective2001.infini-canvas.native',
+                           'microphone(', 'InfiniCanvasCore', '17.5']:
+              assert required in p, f'Missing expected host manifest field: {required}'
+          for required in ['import InfiniCanvasCore', '@main', 'InfiniCanvasRootView()']:
+              assert required in a, f'Missing app entry-point symbol: {required}'
+          assert 'InfiniCanvasPermanent.swiftpm/Sources/InfiniCanvasApp.swift' in project
+          assert 'com.perspective2001.infini-canvas.native' in project
+          print('PASS: native host entry point, bundle ID, minimum iOS and permissions')
+          PY
+      - name: Build real native iPad application entrypoint with the package
+        timeout-minutes: 7
+        run: |
+          set -euo pipefail
+          brew install xcodegen
+          cd IntegrationHost
+          xcodegen generate
+          xcodebuild -project InfiniCanvasHost.xcodeproj -scheme InfiniCanvasHost -destination 'generic/platform=iOS Simulator' -derivedDataPath /tmp/InfiniHost27 CODE_SIGNING_ALLOWED=NO build
