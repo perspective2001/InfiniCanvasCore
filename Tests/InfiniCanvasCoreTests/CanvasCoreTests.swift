@@ -104,7 +104,7 @@ final class CanvasCoreTests: XCTestCase {
         XCTAssertTrue(store.selectionActive)
         let prior = canvas.drawing.dataRepresentation()
 
-        let drag = store.beginSelectionDrag()
+        let drag = store.beginSelectionDrag(in: overlay)
         XCTAssertNotNil(drag)
         XCTAssertEqual(canvas.drawing.strokes.count, 0,
                        "Selected strokes are detached ONLY for live drag preview")
@@ -127,6 +127,61 @@ final class CanvasCoreTests: XCTestCase {
         XCTAssertEqual(backup.index.organizedClipIDs, [clip.id])
         XCTAssertNotNil(backup.index.organizerAreaID)
         XCTAssertNotNil(try PKDrawing(data: backup.drawing).strokes.first)
+        window.isHidden = true
+    }
+
+    func testLassoMoveCommitsAtCorrectZoomThenCanBeSelectedAgain() throws {
+        let store = CanvasStore()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
+        let canvas = PKCanvasView(frame: window.bounds)
+        canvas.minimumZoomScale = 0.045
+        canvas.maximumZoomScale = 10
+        canvas.contentSize = CGSize(width: 12000, height: 12000)
+        window.addSubview(canvas)
+        let overlay = UIView(frame: window.bounds)
+        window.addSubview(overlay)
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+        store.attach(canvas)
+        store.tool = .capture
+
+        for zoom: CGFloat in [0.5, 1, 2] {
+            canvas.drawing = PKDrawing(strokes: [makeStroke(.pen, x: 200, y: 200)])
+            store.clearSelection()
+            canvas.setZoomScale(zoom, animated: false)
+            canvas.setContentOffset(.zero, animated: false)
+            func outline(_ center: CGPoint) -> [CGPoint] {
+                let a = CanvasGeometry.viewportPoint(
+                    drawing: CGPoint(x: center.x - 46, y: center.y - 46),
+                    offset: canvas.contentOffset, scale: canvas.zoomScale)
+                let b = CanvasGeometry.viewportPoint(
+                    drawing: CGPoint(x: center.x + 46, y: center.y + 46),
+                    offset: canvas.contentOffset, scale: canvas.zoomScale)
+                return [a, CGPoint(x: b.x, y: a.y), b, CGPoint(x: a.x, y: b.y)]
+            }
+
+            store.captureLasso(outline(CGPoint(x: 200, y: 200)), from: overlay)
+            XCTAssertTrue(store.selectionActive, "Should capture original stroke at zoom \(zoom)")
+            let before = try XCTUnwrap(canvas.drawing.strokes.first).renderBounds
+            let preview = try XCTUnwrap(store.beginSelectionDrag(in: overlay))
+            XCTAssertEqual(preview.1.midX,
+                           before.midX * zoom - canvas.contentOffset.x,
+                           accuracy: 15, "Live preview must share the lasso coordinate system")
+            store.finishSelectionDrag(screenDelta: CGSize(width: 120, height: 60))
+            XCTAssertFalse(store.selectionActive,
+                           "Do not leave old lasso attached after move")
+            XCTAssertEqual(canvas.drawing.strokes.count, 1,
+                           "Moving must not duplicate or leave source ink behind")
+            let moved = try XCTUnwrap(canvas.drawing.strokes.first).renderBounds
+            XCTAssertEqual(moved.midX - before.midX, 120 / zoom, accuracy: 2)
+            XCTAssertEqual(moved.midY - before.midY, 60 / zoom, accuracy: 2)
+
+            store.captureLasso(outline(CGPoint(x: moved.midX, y: moved.midY)), from: overlay)
+            XCTAssertTrue(store.selectionActive,
+                          "Moved handwriting must be selectable at its NEW location")
+            XCTAssertEqual(store.latestClip?.strokeCount, 1)
+            store.clearSelection()
+        }
         window.isHidden = true
     }
 
