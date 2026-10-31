@@ -1,0 +1,30 @@
+name: Validate Infini Canvas on Apple SDK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Sources/**'
+      - 'Package.swift'
+      - '.github/workflows/validate-apple-sdk.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    runs-on: macos-15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Confirm Xcode and available schemes
+        run: |
+          xcodebuild -version
+          xcodebuild -list
+      - name: Compile for iPad simulator
+        run: |
+          set -o pipefail
+          xcodebuild -scheme InfiniCanvasCore -destination 'generic/platform=iOS Simulator' -derivedDataPath /tmp/InfiniCanvasBuild CODE_SIGNING_ALLOWED=NO build 2>&1 | tee /tmp/infini-build.log
