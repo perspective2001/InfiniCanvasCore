@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @EnvironmentObject private var store: CanvasStore
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage("InfiniCanvas.targetConversationURL") private var targetChatURL = ""
     @AppStorage("InfiniCanvas.showAreaPins") private var showAreaPins = true
     @State private var showLibrary = false
@@ -156,6 +157,9 @@ struct ContentView: View {
             Text("This is a named position inside the same canvas. No separate page is created.")
         }
         .onDisappear { store.saveImmediately() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background { store.saveImmediately() }
+        }
     }
 
     // A dedicated UIKit recognizer avoids SwiftUI/PencilKit competing for the right-edge double tap.
