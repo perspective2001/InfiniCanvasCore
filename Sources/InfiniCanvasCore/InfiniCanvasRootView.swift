@@ -11,6 +11,10 @@ public struct InfiniCanvasRootView: View {
     public var body: some View {
         ContentView()
             .environmentObject(workspace)
+            // Fill the scene explicitly. A PKCanvasView has no intrinsic view
+            // size; relying on it to size a root ZStack can render a blank host.
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(red: 0.991, green: 0.984, blue: 0.961))
             .preferredColorScheme(.light)
             .onChange(of: scenePhase) { _, newPhase in
                 if newPhase != .active {

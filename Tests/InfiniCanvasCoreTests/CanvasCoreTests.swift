@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 import UIKit
 import PencilKit
 @testable import InfiniCanvasCore
@@ -108,6 +109,77 @@ final class CanvasCoreTests: XCTestCase {
         store.tool = .pen
         XCTAssertTrue(canvas.panGestureRecognizer.isEnabled)
         XCTAssertTrue(canvas.pinchGestureRecognizer?.isEnabled ?? false)
+    }
+
+    func testActualRootViewLaunchesWithVisibleControlsAndCanvas() async throws {
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        let window = scene.map { UIWindow(windowScene: $0) } ??
+                     UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
+        window.frame = CGRect(x: 0, y: 0, width: 1024, height: 768)
+        print("APP_TEST sceneAttached=\(window.windowScene != nil)")
+        let host = UIHostingController(rootView: InfiniCanvasRootView())
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        host.view.frame = window.bounds
+
+        // Allow SwiftUI and UIViewRepresentable to perform their real initial layout.
+        try await Task.sleep(for: .milliseconds(600))
+        window.layoutIfNeeded()
+        host.view.layoutIfNeeded()
+        XCTAssertFalse(host.view.isHidden)
+        XCTAssertGreaterThan(host.view.bounds.width, 600)
+        XCTAssertGreaterThan(host.view.bounds.height, 400)
+
+        func collectCanvas(_ view: UIView) -> [PKCanvasView] {
+            (view as? PKCanvasView).map { [$0] } ?? view.subviews.flatMap { collectCanvas($0) }
+        }
+        let canvases = collectCanvas(host.view)
+        XCTAssertEqual(canvases.count, 1, "The root app must create the actual single native drawing surface")
+        guard let canvas = canvases.first else { return }
+        XCTAssertGreaterThan(canvas.bounds.width, 600)
+        XCTAssertGreaterThan(canvas.bounds.height, 400)
+        print("APP_TEST hostFrame=\(host.view.frame) canvasFrame=\(canvas.frame)")
+        XCTAssertEqual(canvas.drawingPolicy, .pencilOnly)
+        XCTAssertTrue(canvas.isScrollEnabled)
+
+        // A fully white root screen hides even the normally visible command bar.
+        // Sample a small thumbnail to catch blank-host regressions.
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 0.25
+        let renderer = UIGraphicsImageRenderer(size: window.bounds.size, format: format)
+        let snapshot = renderer.image { context in
+            // drawHierarchy returns false in SwiftPM's headless test runner
+            // even when the scene and canvas are laid out. Render the layer
+            // tree instead, then explicitly inspect the pixels.
+            context.cgContext.scaleBy(x: 1, y: 1)
+            window.layer.render(in: context.cgContext)
+        }
+        guard let cgImage = snapshot.cgImage, let data = cgImage.dataProvider?.data else {
+            XCTFail("App root did not produce a screenshot"); return
+        }
+        let bytes = CFDataGetBytePtr(data)!
+        let bytesPerPixel = max(1, cgImage.bitsPerPixel / 8)
+        let bpr = cgImage.bytesPerRow
+        let count = min(cgImage.height, 45)
+        var colors = Set<String>()
+        for y in 0..<count {
+            for x in stride(from: 0, to: cgImage.width, by: 7) {
+                let k = y * bpr + x * bytesPerPixel
+                if bytesPerPixel >= 3 {
+                    colors.insert("\(bytes[k]) \(bytes[k+1]) \(bytes[k+2])")
+                }
+            }
+        }
+        print("APP_TEST topPixelsDistinctColors=\(colors.count)")
+        // Emit a very small thumbnail only for launch regression diagnosis.
+        let thumb = UIGraphicsImageRenderer(size: CGSize(width: 160, height: 120)).image { _ in
+            snapshot.draw(in: CGRect(x: 0, y: 0, width: 160, height: 120))
+        }
+        if let data = thumb.pngData() {
+            print("APP_TEST_IMAGE_BASE64:" + data.base64EncodedString())
+        }
+        XCTAssertGreaterThan(colors.count, 4, "Full app root must draw visible toolbar content in its top region")
+        window.isHidden = true
     }
 
 }

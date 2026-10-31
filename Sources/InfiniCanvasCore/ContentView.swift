@@ -48,6 +48,7 @@ struct ContentView: View {
     var body: some View {
         ZStack(alignment: .top) {
             PencilCanvas(store: store)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if store.tool == .capture { LassoOverlay(store: store) }
             if store.tool == .marker && store.fixedHighlighter { FixedHighlighterOverlay(store: store) }
@@ -77,6 +78,8 @@ struct ContentView: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(red: 0.991, green: 0.984, blue: 0.961))
         .overlay(alignment: .trailing) { sideFocusHandle }
         .overlay(alignment: .top) {
             if paperOnly { topChromeGrip }
