@@ -68,8 +68,14 @@ struct ContentView: View {
                     if focusMode {
                         focusHeader
                     } else {
-                        topChromeGrip
-                        if showTopBar { header }
+                        if showTopBar {
+                            topChromeGrip
+                            header
+                        } else {
+                            // Compact mode puts the actual tools almost flush to the top.
+                            // The thin transparent grip still accepts a deliberate down swipe.
+                            topChromeGrip.frame(height: 10)
+                        }
                         toolShelf
                     }
                     Spacer(minLength: 0)
@@ -80,14 +86,20 @@ struct ContentView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(red: 0.991, green: 0.984, blue: 0.961))
-        .overlay(alignment: .trailing) { sideFocusHandle }
+        .overlay(alignment: .leading) {
+            if !paperOnly { edgeHistoryControl(isUndo: true) }
+        }
+        .overlay(alignment: .trailing) {
+            if !paperOnly { edgeHistoryControl(isUndo: false) }
+        }
+        .overlay(alignment: .topTrailing) { sideFocusHandle.padding(.top, 125) }
         .overlay(alignment: .top) {
             if paperOnly { topChromeGrip }
         }
         .overlay(alignment: .topTrailing) {
             if widthPanelExpanded && !paperOnly && !focusMode {
                 floatingWidthPanel
-                    .padding(.top, 105)
+                    .padding(.top, showTopBar ? 105 : 38)
                     .padding(.trailing, 20)
                     .zIndex(99)
                     .transition(.asymmetric(
@@ -178,31 +190,36 @@ struct ContentView: View {
         }
     }
 
-    // A dedicated UIKit recognizer avoids SwiftUI/PencilKit competing for the right-edge double tap.
-    // The hit area is deliberately much larger than the visible marker.
+    // Invisible extreme-right strip: only an intentional double tap toggles
+    // paper-only mode. Both Apple Pencil and finger are accepted; no tap button
+    // or bright green affordance obscures the drawing.
     private var sideFocusHandle: some View {
-        ZStack(alignment: .trailing) {
-            FingerDoubleTapTarget {
-                withAnimation(.spring(response: 0.30, dampingFraction: 0.87)) {
-                    paperOnly.toggle()
-                    widthPanelExpanded = false
-                }
+        FingerDoubleTapTarget {
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.84)) {
+                paperOnly.toggle()
+                widthPanelExpanded = false
             }
-            Capsule()
-                .fill(paperOnly ? teal.opacity(0.92) : teal.opacity(0.62))
-                .frame(width: 9, height: 68)
-                .overlay(alignment: .center) {
-                    Image(systemName: paperOnly ? "chevron.left" : "chevron.right")
-                        .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(.white)
-                }
-                .padding(.trailing, 10)
-                .allowsHitTesting(false)
         }
-        .frame(width: 76, height: 176)
+        .frame(width: 32, height: 120)
         .contentShape(Rectangle())
-        .accessibilityLabel(paperOnly ? "Restore all controls" : "Hide all controls and show only paper")
-        .accessibilityHint("Tap or double-tap the right-edge handle to switch paper-only mode")
+        .accessibilityLabel("Double tap extreme right edge to toggle paper-only mode")
+    }
+
+    private func edgeHistoryControl(isUndo: Bool) -> some View {
+        Button {
+            if isUndo { store.undo() } else { store.redo() }
+        } label: {
+            Image(systemName: isUndo ? "arrow.uturn.backward" : "arrow.uturn.forward")
+                .font(.system(size: 17, weight: .medium))
+                .frame(width: 38, height: 45)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .modifier(CanvasGlassSurface(cornerRadius: 15))
+        .padding(isUndo ? .leading : .trailing, 2)
+        .keyboardShortcut("z", modifiers: isUndo ? .command : [.command, .shift])
+        .accessibilityLabel(isUndo ? "Undo" : "Redo")
+        .accessibilityHint("Requires a deliberate tap; hidden in paper-only mode")
     }
 
     // Always-present top handle. Swipe UP to tuck the header away, DOWN to reveal.
@@ -211,10 +228,8 @@ struct ContentView: View {
     private var topChromeGrip: some View {
         ZStack {
             Color.clear.contentShape(Rectangle())
-            Capsule()
-                .fill(teal.opacity(paperOnly ? 0.30 : 0.58))
-                .frame(width: 52, height: 6)
-                .allowsHitTesting(false)
+            // No coloured tab remains visible when the menus are hidden.
+            Color.clear.frame(width: 52, height: 6).allowsHitTesting(false)
         }
         .frame(height: 30)
         .frame(maxWidth: .infinity)
@@ -247,7 +262,7 @@ struct ContentView: View {
                     }
                 }
         )
-        .background(paperOnly ? Color.clear : Color(uiColor: .systemBackground).opacity(0.72))
+        .background(Color.clear)
         .accessibilityLabel("Top controls grip")
         .accessibilityHint("Swipe up to hide the command bar, swipe down to reveal it, or tap to toggle")
     }
@@ -328,7 +343,6 @@ struct ContentView: View {
                 .accessibilityHint("Open the separately saved layered Art Studio")
             }
             Spacer(minLength: 4)
-            historyButtons
             palmModeButton
             Menu {
                 Button("Overview · 14%", systemImage: "square.dashed") { store.zoomToOverview() }
@@ -363,8 +377,7 @@ struct ContentView: View {
         }
         .padding(.horizontal, 13)
         .padding(.vertical, 7)
-        .background(.regularMaterial)
-        .overlay(alignment: .bottom) { Rectangle().fill(.black.opacity(0.05)).frame(height: 0.5) }
+        .modifier(CanvasGlassSurface(cornerRadius: 20))
     }
 
     // Uncommon actions belong in menus, not between the Pencil and undo controls.
@@ -400,6 +413,7 @@ struct ContentView: View {
             Button("Apple Pencil palette", systemImage: "paintpalette") { store.showSystemTools() }
             Button("Minimal writing controls", systemImage: "arrow.up.left.and.arrow.down.right") { focusMode = true }
             Button("Hide top command bar", systemImage: "chevron.up") { showTopBar = false }
+            Button("Jump to most recent handwriting", systemImage: "location.magnifyingglass") { store.goToLastInk() }
             Button("Hide all menus", systemImage: "rectangle.dashed") { paperOnly = true }
             if !store.organizedUndo.isEmpty {
                 Button("Undo last organization", systemImage: "arrow.uturn.backward") { store.undoOrganization() }
@@ -437,7 +451,6 @@ struct ContentView: View {
 
     private var focusHeader: some View {
         HStack(spacing: 10) {
-            historyButtons
             palmModeButton
             Spacer(minLength: 0)
             Label(store.isSaved ? "Saved" : "Saving", systemImage: store.isSaved ? "checkmark.circle.fill" : "clock")
@@ -457,6 +470,17 @@ struct ContentView: View {
     private var toolShelf: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
+                Button {
+                    withAnimation(.spring(response: 0.32, dampingFraction: 0.84)) {
+                        showTopBar.toggle()
+                    }
+                } label: {
+                    Image(systemName: showTopBar ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(width: 36, height: 46)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(showTopBar ? "Compact top controls" : "Reveal complete command bar")
                 ForEach(CanvasTool.allCases) { tool in
                     Button {
                         if tool == .pen {
@@ -479,8 +503,9 @@ struct ContentView: View {
                                  tool.rawValue).font(.system(size: 10, weight: .medium))
                         }
                         .frame(minWidth: 57, minHeight: 48)
-                        .foregroundStyle(store.tool == tool ? .white : Color.primary)
-                        .background(store.tool == tool ? teal : Color.clear, in: RoundedRectangle(cornerRadius: 11))
+                        .foregroundStyle(store.tool == tool ? teal : Color.primary)
+                        .background(store.tool == tool ? teal.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 11))
+                        .modifier(CanvasGlassSurface(cornerRadius: 11))
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(tool.rawValue)
@@ -572,7 +597,7 @@ struct ContentView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 5)
         }
-        .background(Color(red: 0.964, green: 0.967, blue: 0.962))
+        .modifier(CanvasGlassSurface(cornerRadius: 20))
     }
 
     // Swipe upward from the compact width icon to reveal an expanding, directly
