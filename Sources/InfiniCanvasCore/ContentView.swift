@@ -105,9 +105,9 @@ struct ContentView: View {
         .overlay(alignment: .topLeading) {
             if widthPanelExpanded && !paperOnly && !focusMode && penSizeFrame != .null {
                 liquidSizeMorph
-                    .position(x: penSizeFrame.midX, y: penSizeFrame.minY - 85)
+                    .position(x: penSizeFrame.midX, y: penSizeFrame.maxY + 85)
                     .zIndex(100)
-                    .transition(.scale(scale: 0.50, anchor: .bottom).combined(with: .opacity))
+                    .transition(.scale(scale: 0.50, anchor: .top).combined(with: .opacity))
             }
         }
         .coordinateSpace(name: "infini-canvas-root")
@@ -220,7 +220,9 @@ struct ContentView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .padding(isUndo ? .leading : .trailing, 2)
+        // Keep Redo just inside the right-edge menu gesture strip.
+        .padding(.leading, isUndo ? 2 : 0)
+        .padding(.trailing, isUndo ? 0 : 32)
         .keyboardShortcut("z", modifiers: isUndo ? .command : [.command, .shift])
         .accessibilityLabel(isUndo ? "Undo" : "Redo")
         .accessibilityHint("Requires a deliberate tap; hidden in paper-only mode")
