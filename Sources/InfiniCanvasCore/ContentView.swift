@@ -430,10 +430,25 @@ struct ContentView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 ForEach(CanvasTool.allCases) { tool in
-                    Button { store.tool = tool } label: {
+                    Button {
+                        if tool == .pen {
+                            // First press always restores the ordinary Apple pen, not
+                            // the persisted Fountain profile. Press again for styles.
+                            if store.tool == .pen && store.penProfile == .fluid {
+                                showStrokeOptions = true
+                            } else {
+                                store.tool = .pen
+                                store.penProfile = .fluid
+                            }
+                        } else {
+                            store.tool = tool
+                        }
+                    } label: {
                         VStack(spacing: 3) {
                             Image(systemName: tool.symbol).font(.system(size: 20, weight: .medium))
-                            Text(tool.rawValue).font(.system(size: 10, weight: .medium))
+                            Text(tool == .pen && store.tool == .pen && store.penProfile == .fountain ? "Fountain" :
+                                 tool == .pen && store.tool == .pen && store.penProfile == .monoline ? "Monoline" :
+                                 tool.rawValue).font(.system(size: 10, weight: .medium))
                         }
                         .frame(minWidth: 57, minHeight: 48)
                         .foregroundStyle(store.tool == tool ? .white : Color.primary)
