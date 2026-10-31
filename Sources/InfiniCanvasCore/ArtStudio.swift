@@ -20,10 +20,11 @@ struct ArtworkDocument: Codable {
 }
 
 enum ArtBrush: String, CaseIterable, Identifiable {
-    case fountain = "Fountain", pencil = "Pencil", monoline = "Monoline", watercolor = "Watercolor", crayon = "Crayon", marker = "Marker", eraser = "Eraser"
+    case pen = "Pen", fountain = "Fountain", pencil = "Pencil", monoline = "Monoline", watercolor = "Watercolor", crayon = "Crayon", marker = "Marker", eraser = "Eraser"
     var id: String { rawValue }
     var icon: String {
         switch self {
+        case .pen: return "pencil.tip"
         case .fountain: return "pencil.tip.crop.circle"
         case .pencil: return "pencil"
         case .monoline: return "line.diagonal"
@@ -35,6 +36,7 @@ enum ArtBrush: String, CaseIterable, Identifiable {
     }
     func pkTool(color: UIColor, width: CGFloat) -> any PKTool {
         switch self {
+        case .pen: return PKInkingTool(.pen, color: color, width: width)
         case .fountain: return PKInkingTool(.fountainPen, color: color, width: width)
         case .pencil: return PKInkingTool(.pencil, color: color, width: width)
         case .monoline: return PKInkingTool(.monoline, color: color, width: width)
@@ -50,7 +52,7 @@ enum ArtBrush: String, CaseIterable, Identifiable {
 final class ArtworkStore: ObservableObject {
     @Published var layers: [ArtworkLayer]
     @Published var selectedLayerID: UUID
-    @Published var brush: ArtBrush = .fountain
+    @Published var brush: ArtBrush = .pen
     @Published var brushSize: CGFloat = 4
     @Published var brushColor: UIColor = .black
     @Published var restSafe = true
@@ -127,7 +129,9 @@ final class ArtworkStore: ObservableObject {
         guard layers.count > 1 else { status = "Keep at least one layer"; return }
         pendingDrawings.removeValue(forKey: id)
         layers.removeAll { $0.id == id }
-        if selectedLayerID == id { selectedLayerID = layers.last!.id }
+        if selectedLayerID == id {
+            selectedLayerID = layers.first(where: { !$0.isLocked && $0.isVisible })?.id ?? layers.last!.id
+        }
         saveNow()
     }
     func moveLayer(from offsets: IndexSet, to destination: Int) {
