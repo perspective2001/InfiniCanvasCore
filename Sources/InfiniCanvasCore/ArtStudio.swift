@@ -397,7 +397,7 @@ final class LayeredArtworkHost: UIView {
             canvas.isOpaque = false
             canvas.drawingPolicy = .pencilOnly
             canvas.minimumZoomScale = 0.1
-            canvas.maximumZoomScale = 32
+            canvas.maximumZoomScale = 10
             canvas.contentSize = paperSize
             canvas.panGestureRecognizer.minimumNumberOfTouches = 1
             coordinator.suppress = true
