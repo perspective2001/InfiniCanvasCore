@@ -16,6 +16,7 @@ struct ContentView: View {
     @State private var shareURL: URL?
     @State private var shareItems: [Any] = []
     @State private var stashDropFrame: CGRect = .null
+    @State private var penSizeFrame: CGRect = .null
     @Namespace private var widthMorph
     @State private var showShare = false
     @State private var importing = false
@@ -97,22 +98,19 @@ struct ContentView: View {
         .overlay(alignment: .trailing) {
             if !paperOnly { edgeHistoryControl(isUndo: false) }
         }
-        .overlay(alignment: .topTrailing) { sideFocusHandle.padding(.top, 125) }
+        .overlay(alignment: .trailing) { sideFocusHandle }
         .overlay(alignment: .top) {
             if paperOnly { topChromeGrip }
         }
-        .overlay(alignment: .topTrailing) {
-            if widthPanelExpanded && !paperOnly && !focusMode {
-                floatingWidthPanel
-                    .padding(.top, showTopBar ? 105 : 38)
-                    .padding(.trailing, 20)
-                    .zIndex(99)
-                    .transition(.asymmetric(
-                        insertion: .scale(scale: 0.65, anchor: .topTrailing).combined(with: .opacity),
-                        removal: .scale(scale: 0.85, anchor: .topTrailing).combined(with: .opacity)
-                    ))
+        .overlay(alignment: .topLeading) {
+            if widthPanelExpanded && !paperOnly && !focusMode && penSizeFrame != .null {
+                liquidSizeMorph
+                    .position(x: penSizeFrame.midX, y: penSizeFrame.maxY + 85)
+                    .zIndex(100)
+                    .transition(.scale(scale: 0.50, anchor: .top).combined(with: .opacity))
             }
         }
+        .coordinateSpace(name: "infini-canvas-root")
         .tint(teal)
         .fullScreenCover(isPresented: $showArtStudio) { ArtStudioView() }
         .sheet(isPresented: $showLibrary) { ClipLibraryView(store: store, onOpenChat: openSpecificChat) }
@@ -205,7 +203,8 @@ struct ContentView: View {
                 widthPanelExpanded = false
             }
         }
-        .frame(width: 32, height: 120)
+        .frame(width: 29)
+        .frame(maxHeight: .infinity)
         .contentShape(Rectangle())
         .accessibilityLabel("Double tap extreme right edge to toggle paper-only mode")
     }
@@ -214,14 +213,16 @@ struct ContentView: View {
         Button {
             if isUndo { store.undo() } else { store.redo() }
         } label: {
-            Image(systemName: isUndo ? "arrow.uturn.backward" : "arrow.uturn.forward")
-                .font(.system(size: 17, weight: .medium))
-                .frame(width: 38, height: 45)
+            Image(systemName: isUndo ? "chevron.left" : "chevron.right")
+                .font(.system(size: 18, weight: .regular))
+                .foregroundStyle(Color.primary.opacity(0.36))
+                .frame(width: 29, height: 45)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .modifier(CanvasGlassSurface(cornerRadius: 15))
-        .padding(isUndo ? .leading : .trailing, 2)
+        // Keep Redo just inside the right-edge menu gesture strip.
+        .padding(.leading, isUndo ? 2 : 0)
+        .padding(.trailing, isUndo ? 0 : 32)
         .keyboardShortcut("z", modifiers: isUndo ? .command : [.command, .shift])
         .accessibilityLabel(isUndo ? "Undo" : "Redo")
         .accessibilityHint("Requires a deliberate tap; hidden in paper-only mode")
@@ -382,7 +383,7 @@ struct ContentView: View {
         }
         .padding(.horizontal, 13)
         .padding(.vertical, 7)
-        .modifier(CanvasGlassSurface(cornerRadius: 20))
+        .background(.regularMaterial)
     }
 
     // Uncommon actions belong in menus, not between the Pencil and undo controls.
@@ -509,9 +510,8 @@ struct ContentView: View {
                                  tool.rawValue).font(.system(size: 10, weight: .medium))
                         }
                         .frame(minWidth: 57, minHeight: 48)
-                        .foregroundStyle(store.tool == tool ? teal : Color.primary)
-                        .background(store.tool == tool ? teal.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 11))
-                        .modifier(CanvasGlassSurface(cornerRadius: 11))
+                        .foregroundStyle(store.tool == tool ? .white : Color.primary)
+                        .background(store.tool == tool ? teal : Color.clear, in: RoundedRectangle(cornerRadius: 11))
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(tool.rawValue)
@@ -604,7 +604,8 @@ struct ContentView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 5)
         }
-        .modifier(CanvasGlassSurface(cornerRadius: 20))
+        .background(Color(red: 0.964, green: 0.967, blue: 0.962))
+        .scrollIndicators(.hidden)
     }
 
     // Lassoed original ink stays on canvas. Only the miniature, persistent clip
@@ -644,7 +645,7 @@ struct ContentView: View {
         .background {
             GeometryReader { geometry in
                 Color.clear.preference(key: StashDropFramePreferenceKey.self,
-                                       value: geometry.frame(in: .global))
+                                       value: geometry.frame(in: .named("infini-canvas-root")))
             }
         }
         .onPreferenceChange(StashDropFramePreferenceKey.self) { stashDropFrame = $0 }
@@ -772,9 +773,13 @@ struct ContentView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.bordered)
-        .matchedGeometryEffect(id: "penSizePill", in: widthMorph,
-                               properties: .frame, anchor: .topTrailing,
-                               isSource: !widthPanelExpanded)
+        .background {
+            GeometryReader { geo in
+                Color.clear.preference(key: PenSizeFramePreferenceKey.self,
+                    value: geo.frame(in: .named("infini-canvas-root")))
+            }
+        }
+        .onPreferenceChange(PenSizeFramePreferenceKey.self) { penSizeFrame = $0 }
         .accessibilityLabel("Tool width \(String(format: "%.1f", Double(activeSize))) points, \(String(format: "%.1f", Double(visibleSize))) at current zoom")
         .accessibilityHint("Swipe up to expand size slider, keep dragging to resize, or tap")
         .highPriorityGesture(
@@ -803,111 +808,44 @@ struct ContentView: View {
         )
     }
 
-    // A narrow drop-shaped extension of the existing 84-point width pill,
-    // NOT a sidebar. It expands upward and remains the same teal-green identity.
-    private var floatingWidthPanel: some View {
-        VStack(spacing: 7) {
-            Capsule()
-                .fill(teal.opacity(0.52))
-                .frame(width: 31, height: 4)
-                .frame(height: 17)
-                .contentShape(Rectangle())
-                .gesture(DragGesture(minimumDistance: 8).onEnded { value in
-                    if value.translation.height > 24 {
-                        withAnimation(.spring(response: 0.31, dampingFraction: 0.76)) {
-                            widthPanelExpanded = false
-                        }
-                    }
-                })
-                .accessibilityLabel("Swipe down to collapse width")
-            HStack(spacing: 4) {
-                Image(systemName: store.tool == .eraser ? "eraser" : "lineweight")
-                Text(String(format: "%.1f", Double(activeSize)))
-                    .monospacedDigit()
-            }
-            .font(.system(size: 13, weight: .semibold, design: .rounded))
-            .foregroundStyle(teal)
-            Text(String(format: "%.0f%% · %.1f pt",
-                        Double(store.zoom * 100), Double(visibleSize)))
-                .font(.system(size: 9, weight: .semibold, design: .rounded))
-                .monospacedDigit()
-                .minimumScaleFactor(0.7)
-                .lineLimit(1)
-                .accessibilityLabel("Width at the current zoom, in points")
-            ZStack {
-                Circle().strokeBorder(teal.opacity(0.16), lineWidth: 1)
-                    .frame(width: 57, height: 57)
-                if store.tool == .eraser {
-                    Circle().strokeBorder(teal, lineWidth: 1.8)
-                        .frame(width: min(57, max(3, visibleSize)),
-                               height: min(57, max(3, visibleSize)))
-                } else {
-                    Circle().fill(Color(uiColor: store.inkColor))
-                        .frame(width: min(57, max(1, visibleSize)),
-                               height: min(57, max(1, visibleSize)))
-                }
-            }
-            .frame(height: 60)
-            .accessibilityLabel("Actual width preview at current zoom; capped at 57 points")
-            if store.tool == .pen {
-                Menu {
-                    ForEach(PenProfile.allCases) { profile in
-                        Button(profile.rawValue) { store.penProfile = profile }
-                    }
-                } label: {
-                    Text(store.penProfile.rawValue)
-                        .font(.system(size: 10, weight: .medium))
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 5)
-                        .background(teal.opacity(0.09), in: Capsule())
-                }
+    // Size line itself swells/thins: no knob, separate side panel, or change of X position.
+    private var liquidSizeMorph: some View {
+        let thickness = CGFloat(min(44, max(5, activeSize *
+            (store.tool == .eraser ? 0.75 : 2.2))))
+        return VStack(spacing: 4) {
+            Text(String(format: "%.1f", Double(activeSize)))
+                .font(.caption2.monospacedDigit().weight(.semibold))
                 .foregroundStyle(teal)
-            }
-            GeometryReader { geometry in
-                let height = geometry.size.height
-                let range = activeSizeLimits
-                let percent = min(1, max(0, (activeSize - range.lowerBound) /
-                                             (range.upperBound - range.lowerBound)))
-                ZStack(alignment: .bottom) {
-                    Capsule().fill(teal.opacity(0.12)).frame(width: 19)
-                    Capsule().fill(LinearGradient(
-                        colors: [teal, Color.cyan.opacity(0.75)],
-                        startPoint: .bottom, endPoint: .top))
-                        .frame(width: 19, height: max(4, height * percent))
-                    Capsule().fill(.white.opacity(0.9))
-                        .frame(width: 15, height: 5)
-                        .offset(y: -max(0, height - 6) * percent)
+            GeometryReader { geo in
+                ZStack {
+                    Capsule()
+                        .fill(teal.opacity(0.09))
+                        .frame(width: 48)
+                    Capsule()
+                        .fill(LinearGradient(colors: [
+                            teal.opacity(0.94),
+                            Color(red: 0.20, green: 0.72, blue: 0.68).opacity(0.70)
+                        ], startPoint: .bottom, endPoint: .top))
+                        .frame(width: thickness)
+                        .modifier(CanvasGlassSurface(cornerRadius: thickness / 2))
+                        .animation(.interactiveSpring(response: 0.18, dampingFraction: 0.82),
+                                   value: thickness)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
-                .gesture(DragGesture(minimumDistance: 0).onChanged { value in
-                    let ratio = 1 - min(1, max(0, value.location.y / max(1, height)))
-                    applySize(range.lowerBound + ratio * (range.upperBound - range.lowerBound))
+                .gesture(DragGesture(minimumDistance: 0).onChanged { drag in
+                    let t = 1 - min(1, max(0, drag.location.y / max(1, geo.size.height)))
+                    let range = activeSizeLimits
+                    applySize(range.lowerBound + t * (range.upperBound - range.lowerBound))
                 })
             }
-            .frame(height: 150)
-            .accessibilityLabel("Continuous vertical brush or eraser width slider")
-            Button {
-                withAnimation(.spring(response: 0.32, dampingFraction: 0.79)) {
-                    widthPanelExpanded = false
-                }
-            } label: {
-                Image(systemName: "chevron.down")
-                    .font(.caption.weight(.semibold))
-                    .frame(width: 35, height: 23)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(teal)
+            .frame(height: 122)
         }
-        .padding(.horizontal, 9)
+        .padding(.horizontal, 8)
         .padding(.vertical, 8)
-        .frame(width: 111)
-        .modifier(CanvasGlassSurface(cornerRadius: 30))
-        .matchedGeometryEffect(id: "penSizePill", in: widthMorph,
-                               properties: .frame, anchor: .topTrailing,
-                               isSource: widthPanelExpanded)
-        .shadow(color: teal.opacity(0.15), radius: 12, y: 5)
+        .frame(width: 84, height: 170)
+        .background(teal.opacity(0.045), in: Capsule())
+        .accessibilityLabel("Swipe up to thicken the liquid line, down to thin it")
     }
 
     private var textNoteCards: some View {
@@ -1198,6 +1136,14 @@ private enum ClipDropAction: String, CaseIterable {
 }
 
 private struct StashDropFramePreferenceKey: PreferenceKey {
+    static var defaultValue: CGRect = .null
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let frame = nextValue()
+        if frame != .null { value = frame }
+    }
+}
+
+private struct PenSizeFramePreferenceKey: PreferenceKey {
     static var defaultValue: CGRect = .null
     static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
         let frame = nextValue()

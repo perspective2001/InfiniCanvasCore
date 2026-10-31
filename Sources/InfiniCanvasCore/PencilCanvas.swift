@@ -16,6 +16,9 @@ struct PencilCanvas: UIViewRepresentable {
         // Native PencilKit draws only with Pencil; finger gestures navigate.
         // Apple documents one-finger scrolling in pencil-only mode.
         view.isScrollEnabled = true
+        // The canvas fills the iPad: no scrollbar should appear when panning.
+        view.showsVerticalScrollIndicator = false
+        view.showsHorizontalScrollIndicator = false
         view.minimumZoomScale = 0.045
         view.maximumZoomScale = 10
         view.bouncesZoom = false
@@ -71,7 +74,10 @@ struct LassoOverlay: UIViewRepresentable {
         view.backgroundColor = .clear
         view.isOpaque = false
         view.onComplete = { [weak store] points, overlay in store?.captureLasso(points, from: overlay) }
-        view.onBeginMove = { [weak store] in store?.beginSelectionDrag() }
+        view.onBeginMove = { [weak store, weak view] in
+            guard let view else { return nil }
+            return store?.beginSelectionDrag(in: view)
+        }
         view.onFinishMove = { [weak store] delta in store?.finishSelectionDrag(screenDelta: delta) }
         view.onCancelMove = { [weak store] in store?.cancelSelectionDrag() }
         view.onPinch = { [weak store] recognizer, overlay in store?.handleFingerPinch(recognizer, in: overlay) }
@@ -82,7 +88,7 @@ struct LassoOverlay: UIViewRepresentable {
     }
     func updateUIView(_ view: LassoTouchView, context: Context) {
         view.stashDropFrame = stashDropFrame
-        if !store.selectionActive && view.hasOutline { view.resetOutline() }
+        if !store.selectionActive && view.hasOutline && !view.isDragging { view.resetOutline() }
     }
 }
 
@@ -100,6 +106,7 @@ final class LassoTouchView: UIView, UIGestureRecognizerDelegate {
     private var beginning = CGPoint.zero
     private var lastPoint = CGPoint.zero
     private var moving = false
+    var isDragging: Bool { moving }
     private var selectedPreview: UIImageView?
 
     private let outline: CAShapeLayer = {
@@ -212,9 +219,12 @@ final class LassoTouchView: UIView, UIGestureRecognizerDelegate {
         if moving {
             // The source drawing is restored before stashing: the UI does not
             // delete the handwriting, it saves a compact reference to the clip.
-            if let window,
-               stashDropFrame != .null,
-               stashDropFrame.contains(convert(ending, to: window)),
+            // stashDropFrame and LassoTouchView are both in the root drawing
+            // view coordinate system. The previous code compared SwiftUI's
+            // frame to UIWindow coordinates, which can differ by safe-area
+            // and hosting view offsets.
+            if stashDropFrame != .null,
+               stashDropFrame.insetBy(dx: -22, dy: -20).contains(ending),
                onStashDrop?() == true {
                 moving = false
                 hasOutline = false
@@ -222,8 +232,7 @@ final class LassoTouchView: UIView, UIGestureRecognizerDelegate {
                 redraw()
                 let thumbnail = selectedPreview
                 selectedPreview = nil
-                let target = convert(CGPoint(x: stashDropFrame.midX,
-                                             y: stashDropFrame.midY), from: window)
+                let target = CGPoint(x: stashDropFrame.midX, y: stashDropFrame.midY)
                 if let thumbnail {
                     UIView.animate(withDuration: 0.38, delay: 0,
                                    usingSpringWithDamping: 0.77, initialSpringVelocity: 0.32,
@@ -243,7 +252,10 @@ final class LassoTouchView: UIView, UIGestureRecognizerDelegate {
             onFinishMove?(CGSize(width: ending.x - beginning.x, height: ending.y - beginning.y))
             selectedPreview?.removeFromSuperview()
             selectedPreview = nil
-            hasOutline = true
+            // A finished move must never leave a stale lasso polygon behind.
+            hasOutline = false
+            points = []
+            redraw()
         } else {
             if hypot(ending.x - lastPoint.x, ending.y - lastPoint.y) > 1.25 {
                 points.append(ending)

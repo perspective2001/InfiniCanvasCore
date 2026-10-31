@@ -865,7 +865,7 @@ final class CanvasStore: ObservableObject {
     // Detach the selected ink once and show a cached image in the lasso overlay.
     // That image follows the Pencil every frame without re-rendering PKDrawing.
     // Commit the vector transform once on Pencil lift; cancel restores original ink.
-    func beginSelectionDrag() -> (UIImage, CGRect)? {
+    func beginSelectionDrag(in overlay: UIView) -> (UIImage, CGRect)? {
         guard let view = canvas, selectionActive, !selectedIndices.isEmpty, dragOriginal == nil else { return nil }
         let source = view.drawing
         let strokes = source.strokes
@@ -883,10 +883,18 @@ final class CanvasStore: ObservableObject {
         loading = true
         view.drawing = PKDrawing(strokes: dragRemaining)
         loading = false
-        let rect = CGRect(x: bounds.minX * view.zoomScale - view.contentOffset.x,
-                          y: bounds.minY * view.zoomScale - view.contentOffset.y,
-                          width: bounds.width * view.zoomScale,
-                          height: bounds.height * view.zoomScale)
+        // Explicit UIKit conversion: the Pencil overlay and the PencilKit
+        // scroll view must agree on one coordinate system despite safe areas,
+        // zoom and view offsets. The old rect assumed matching view origins.
+        let viewportOrigin = CGPoint(
+            x: bounds.minX * view.zoomScale - view.contentOffset.x,
+            y: bounds.minY * view.zoomScale - view.contentOffset.y)
+        let visibleCanvas = view.convert(view.bounds, to: overlay)
+        let rect = CGRect(
+            x: viewportOrigin.x + visibleCanvas.minX,
+            y: viewportOrigin.y + visibleCanvas.minY,
+            width: bounds.width * view.zoomScale,
+            height: bounds.height * view.zoomScale)
         return (image, rect)
     }
     func finishSelectionDrag(screenDelta delta: CGSize) {
@@ -900,13 +908,19 @@ final class CanvasStore: ObservableObject {
         loading = true
         view.drawing = PKDrawing(strokes: dragRemaining + moved)
         loading = false
-        selectedIndices = Set(dragRemaining.count..<(dragRemaining.count + moved.count))
+        // The moved ink is committed exactly once. End the old lasso
+        // immediately: it refers to old screen coordinates and previously
+        // caused distant, invisible strokes to remain attached to it.
+        selectedIndices = []
+        selectionActive = false
+        latestClip = nil
         dragOriginal = nil
         dragSelected = []
         dragRemaining = []
+        dragBounds = .zero
         isSaved = false
         scheduleSave()
-        status = "Moved ink with live preview · Undo available"
+        status = "Moved ink · circle it again to select at its new position"
     }
     func cancelSelectionDrag() {
         if let source = dragOriginal, let view = canvas {
