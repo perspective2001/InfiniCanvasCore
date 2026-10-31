@@ -37,6 +37,7 @@ struct ContentView: View {
     @State private var clipTargetFrames: [ClipDropAction: CGRect] = [:]
     @State private var activeMiniDrag: UUID? = nil
     @State private var miniDragPoint: CGPoint? = nil
+    @State private var stashProximity: CGFloat = 0
     @State private var highlightedDrop: ClipDropAction? = nil
     @State private var showEraserOptions = false
     @State private var showHighlighterOptions = false
@@ -60,7 +61,14 @@ struct ContentView: View {
             PencilCanvas(store: store)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            if store.tool == .capture { LassoOverlay(store: store, stashDropFrame: stashDropFrame) }
+            if store.tool == .capture {
+                LassoOverlay(store: store, stashDropFrame: stashDropFrame,
+                             onStashProximity: { value in
+                    // Quantize to avoid needless layout work for every Pencil sample.
+                    let rounded = (value * 10).rounded() / 10
+                    if rounded != stashProximity { stashProximity = rounded }
+                })
+            }
             if store.tool == .marker && store.fixedHighlighter { FixedHighlighterOverlay(store: store) }
             if let focus = store.focusedArea { isolatedAreaShade(focus).allowsHitTesting(false) }
             spatialOrganizerOverlay
@@ -421,6 +429,17 @@ struct ContentView: View {
         .padding(.horizontal, 13)
         .padding(.vertical, 7)
         .background(.regularMaterial)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 18)
+                .onEnded { value in
+                    guard value.translation.height < -34,
+                          abs(value.translation.height) > abs(value.translation.width) * 1.3
+                    else { return }
+                    withAnimation(.spring(response: 0.27, dampingFraction: 0.8)) {
+                        showTopBar = false
+                    }
+                }
+        )
     }
 
     // Uncommon actions belong in menus, not between the Pencil and undo controls.
@@ -531,7 +550,7 @@ struct ContentView: View {
                             // First press always restores the ordinary Apple pen, not
                             // the persisted Fountain profile. Press again for styles.
                             if store.tool == .pen && store.penProfile == .fluid {
-                                widthPanelExpanded = true
+                                showDetailedSize = true
                             } else {
                                 store.tool = .pen
                                 store.penProfile = .fluid
@@ -549,6 +568,12 @@ struct ContentView: View {
                         .frame(minWidth: 57, minHeight: 48)
                         .foregroundStyle(store.tool == tool ? .white : Color.primary)
                         .background(store.tool == tool ? teal : Color.clear, in: RoundedRectangle(cornerRadius: 11))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 11)
+                                .strokeBorder(.white.opacity(store.tool == tool ? 0.26 : 0.10),
+                                              lineWidth: 0.7)
+                                .allowsHitTesting(false)
+                        }
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(tool.rawValue)
@@ -642,6 +667,16 @@ struct ContentView: View {
         }
         .background(Color(red: 0.964, green: 0.967, blue: 0.962))
         .scrollIndicators(.hidden)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 18).onEnded { value in
+                guard !showTopBar, value.translation.height > 34,
+                      abs(value.translation.height) > abs(value.translation.width) * 1.3
+                else { return }
+                withAnimation(.spring(response: 0.27, dampingFraction: 0.8)) {
+                    showTopBar = true
+                }
+            }
+        )
     }
 
     // Lassoed original ink stays on canvas. Only the miniature, persistent clip
@@ -696,8 +731,11 @@ struct ContentView: View {
         .frame(minWidth: 140, minHeight: 35)
         .padding(.horizontal, 10)
         .background(.thinMaterial, in: Capsule())
-        .overlay(Capsule().stroke(teal.opacity(store.selectionActive ? 0.35 : 0.16),
-                                  lineWidth: store.selectionActive ? 1.5 : 0.6))
+        .overlay(Capsule().stroke(teal.opacity(0.16 + stashProximity * 0.54),
+                                  lineWidth: 0.6 + stashProximity * 1.4))
+        .scaleEffect(1 + stashProximity * 0.035)
+        .animation(.spring(response: 0.22, dampingFraction: 0.75),
+                   value: stashProximity)
         .background {
             GeometryReader { geo in
                 Color.clear.preference(
@@ -807,8 +845,8 @@ struct ContentView: View {
         store.tool == .eraser ? store.eraserWidth : store.strokeWidth
     }
     private var activeSizeLimits: ClosedRange<CGFloat> {
-        if store.tool == .eraser { return 3...60 }
-        return 0.4...(store.mode == .art ? 80 : 18)
+        if store.tool == .eraser { return 3...100 }
+        return 0.4...(store.mode == .art ? 240 : 160)
     }
     private func applySize(_ requested: CGFloat) {
         let range = activeSizeLimits
