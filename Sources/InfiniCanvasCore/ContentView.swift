@@ -1,0 +1,750 @@
+import SwiftUI
+import UIKit
+import PencilKit
+import UniformTypeIdentifiers
+
+struct ContentView: View {
+    @EnvironmentObject private var store: CanvasStore
+    @AppStorage("InfiniCanvas.targetConversationURL") private var targetChatURL = ""
+    @AppStorage("InfiniCanvas.showAreaPins") private var showAreaPins = true
+    @State private var showLibrary = false
+    @State private var showSettings = false
+    @State private var showAddArea = false
+    @State private var newAreaName = ""
+    @State private var focusMode = false
+    @State private var shareURL: URL?
+    @State private var showShare = false
+    @State private var importing = false
+    @State private var selectedImportURL: URL?
+    @State private var confirmRestore = false
+    @State private var selectedRevision: URL?
+    @State private var showTextEditor = false
+    @State private var editingNote: TypedNote?
+    @State private var textDraft = ""
+    @State private var confirmRevision = false
+    @State private var showLectures = false
+    @State private var selectedAutoBackup: URL?
+    @State private var confirmAutoBackup = false
+    @State private var showStrokeOptions = false
+    @State private var showEraserOptions = false
+    @State private var showHighlighterOptions = false
+    @State private var showArtStudio = false
+    @State private var showTopBar = true
+    @State private var paperOnly = false
+    @State private var showFocusChoices = false
+
+    private let teal = Color(red: 0.07, green: 0.40, blue: 0.43)
+    private let swatches: [(String, UIColor)] = [
+        ("Ink", UIColor(red: 0.10, green: 0.16, blue: 0.20, alpha: 1)),
+        ("Blue", UIColor(red: 0.17, green: 0.36, blue: 0.76, alpha: 1)),
+        ("Teal", UIColor(red: 0.06, green: 0.52, blue: 0.53, alpha: 1)),
+        ("Red", UIColor(red: 0.83, green: 0.24, blue: 0.25, alpha: 1)),
+        ("Gold", UIColor(red: 0.85, green: 0.53, blue: 0.11, alpha: 1)),
+        ("Purple", UIColor(red: 0.48, green: 0.31, blue: 0.69, alpha: 1))
+    ]
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            PencilCanvas(store: store)
+
+            if store.tool == .capture { LassoOverlay(store: store) }
+            if store.tool == .marker && store.fixedHighlighter { FixedHighlighterOverlay(store: store) }
+            if let focus = store.focusedArea { isolatedAreaShade(focus).allowsHitTesting(false) }
+            if store.tool != .capture && !focusMode && store.zoom > 0.5 { textNoteCards
+                .allowsHitTesting(!store.restSafe)
+            }
+            if showAreaPins && store.zoom <= 0.55 && !focusMode && store.tool != .capture {
+                semanticOverview
+                    .allowsHitTesting(!store.restSafe)
+            } else if showAreaPins && store.zoom <= 0.85 && !focusMode && store.tool != .capture {
+                areaPins
+                    .allowsHitTesting(!store.restSafe)
+            }
+            if !paperOnly {
+                VStack(spacing: 0) {
+                    if focusMode {
+                        focusHeader
+                    } else {
+                        if showTopBar { header } else { topEdgeRevealZone }
+                        toolShelf
+                    }
+                    Spacer(minLength: 0)
+                    if store.tool == .capture && !focusMode { lassoActions }
+                    if !focusMode { footer }
+                }
+            }
+        }
+        .overlay(alignment: .trailing) { sideFocusHandle }
+        .overlay(alignment: .top) {
+            if paperOnly {
+                topEdgeRevealZone
+                    .frame(height: 25)
+            }
+        }
+        .tint(teal)
+        .fullScreenCover(isPresented: $showArtStudio) { ArtStudioView() }
+        .sheet(isPresented: $showLibrary) { ClipLibraryView(store: store, onOpenChat: openSpecificChat) }
+        .sheet(isPresented: $showLectures) { LectureLibraryView(store: store) }
+        .sheet(isPresented: $store.organizationPreview) { OrganizationPreviewView(store: store) }
+        .sheet(isPresented: $showSettings) {
+            ChatDestinationView(store: store, conversationURL: $targetChatURL, showAreaPins: $showAreaPins)
+        }
+        .sheet(isPresented: $showTextEditor) {
+            NavigationStack {
+                VStack {
+                    TextEditor(text: $textDraft)
+                        .font(.body)
+                        .scrollContentBackground(.hidden)
+                        .padding(14)
+                        .background(.white, in: RoundedRectangle(cornerRadius: 12))
+                    Spacer()
+                }
+                .padding(18)
+                .background(Color(white: 0.97))
+                .navigationTitle(editingNote == nil ? "New typed note" : "Edit typed note")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { showTextEditor = false; editingNote = nil }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") {
+                            let value = textDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if let note = editingNote { store.editTextNote(note, text: value) }
+                            else if !value.isEmpty { store.addTextNote(value) }
+                            editingNote = nil; showTextEditor = false
+                        }
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showShare) {
+            if let url = shareURL { SystemShareSheet(items: [url]) }
+        }
+        .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
+            if case .success(let url) = result { selectedImportURL = url; confirmRestore = true }
+        }
+        .confirmationDialog("Replace current canvas from backup?", isPresented: $confirmRestore) {
+            Button("Restore complete backup", role: .destructive) {
+                if let url = selectedImportURL { _ = store.restoreCompleteBackup(url) }
+                selectedImportURL = nil
+            }
+            Button("Cancel", role: .cancel) { selectedImportURL = nil }
+        } message: {
+            Text("A recovery copy of your existing ink will be retained. Imported areas and clips replace their current index.")
+        }
+        .confirmationDialog("Restore a complete automatic snapshot?", isPresented: $confirmAutoBackup) {
+            Button("Restore this snapshot", role: .destructive) {
+                if let url = selectedAutoBackup { _ = store.restoreAutomaticBackup(url) }
+                selectedAutoBackup = nil
+            }
+            Button("Cancel", role: .cancel) { selectedAutoBackup = nil }
+        } message: { Text("This snapshot replaces the current notes, clips, labels and lecture audio. Your current drawing receives a recovery copy first.") }
+        .confirmationDialog("Restore an earlier drawing revision?", isPresented: $confirmRevision) {
+            Button("Restore earlier ink", role: .destructive) {
+                if let url = selectedRevision { _ = store.restoreRevision(url) }
+                selectedRevision = nil
+            }
+            Button("Cancel", role: .cancel) { selectedRevision = nil }
+        } message: { Text("Your current ink is copied to a recovery file before restoration.") }
+        .alert("Name this canvas area", isPresented: $showAddArea) {
+            TextField("e.g. PSYC 1010 · Learning", text: $newAreaName)
+            Button("Add marker") {
+                let title = newAreaName.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !title.isEmpty { store.addArea(title) }
+                newAreaName = ""
+            }
+            Button("Cancel", role: .cancel) { newAreaName = "" }
+        } message: {
+            Text("This is a named position inside the same canvas. No separate page is created.")
+        }
+        .onDisappear { store.saveImmediately() }
+    }
+
+    // Tap the small right-edge marker twice to show/hide ALL controls, as in Universal Reader.
+    private var sideFocusHandle: some View {
+        Capsule()
+            .fill(paperOnly ? teal.opacity(0.62) : Color.gray.opacity(0.35))
+            .frame(width: 5, height: 52)
+            .frame(width: 30, height: 85, alignment: .trailing)
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2) {
+                withAnimation(.easeInOut(duration: 0.18)) { paperOnly.toggle() }
+            }
+            .accessibilityLabel(paperOnly ? "Double tap to show menus" : "Double tap to hide all menus")
+    }
+
+    // The entire narrow top strip accepts a deliberate downward swipe—not just a tiny button.
+    // It sits *inside* the app safe area so we don't steal iPadOS Notification Center gestures.
+    private var topEdgeRevealZone: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .top) {
+                Color.clear.contentShape(Rectangle())
+                    .gesture(DragGesture(minimumDistance: 16).onEnded { value in
+                        if value.translation.height > 32 && abs(value.translation.width) < 100 {
+                            withAnimation(.easeOut(duration: 0.22)) {
+                                paperOnly = false
+                                focusMode = false
+                                showTopBar = true
+                            }
+                        }
+                    })
+                Capsule()
+                    .fill(teal.opacity(0.45))
+                    .frame(width: 48, height: 5)
+                    .padding(.top, 4)
+                    .allowsHitTesting(false)
+            }
+            .frame(width: geometry.size.width, height: 35)
+        }
+        .frame(height: 35)
+        .accessibilityLabel("Swipe down at top to reveal the command bar")
+    }
+
+    private func isolatedAreaShade(_ area: CanvasArea) -> some View {
+        GeometryReader { geo in
+            let center = store.screenPoint(for: area)
+            let w = CGFloat(area.width ?? 2400) * store.zoom
+            let h = CGFloat(area.height ?? 1600) * store.zoom
+            let focus = CGRect(x: center.x - w / 2, y: center.y - h / 2, width: w, height: h)
+            Path { path in
+                path.addRect(CGRect(origin: .zero, size: geo.size))
+                path.addRoundedRect(in: focus, cornerSize: CGSize(width: 10, height: 10))
+            }
+            .fill(Color(uiColor: CanvasStore.paperBackground(store.paper)).opacity(0.97), style: FillStyle(eoFill: true))
+            .overlay {
+                Path { path in path.addRoundedRect(in: focus, cornerSize: CGSize(width: 10, height: 10)) }
+                    .stroke(teal.opacity(0.4), lineWidth: 1)
+            }
+        }
+        .ignoresSafeArea()
+    }
+
+    // A quiet, stable command bar: Undo and Redo never disappear into scrolling tools.
+    private var historyButtons: some View {
+        HStack(spacing: 4) {
+            Button { store.undo() } label: {
+                Image(systemName: "arrow.uturn.backward")
+                    .frame(width: 37, height: 40)
+            }
+            .keyboardShortcut("z", modifiers: .command)
+            .accessibilityLabel("Undo last stroke")
+            .accessibilityHint("Reverses the last completed pencil stroke or edit")
+            Button { store.redo() } label: {
+                Image(systemName: "arrow.uturn.forward")
+                    .frame(width: 37, height: 40)
+            }
+            .keyboardShortcut("z", modifiers: [.command, .shift])
+            .accessibilityLabel("Redo")
+            .accessibilityHint("Restores the last undone stroke")
+        }
+        .buttonStyle(.borderless)
+        .font(.system(size: 17, weight: .semibold))
+        .foregroundStyle(teal)
+        .padding(3)
+        .background(Color.white.opacity(0.86), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.black.opacity(0.05)))
+    }
+
+    private var palmModeButton: some View {
+        Button { store.restSafe.toggle() } label: {
+            Label(store.restSafe ? "RestSafe" : "Navigate", systemImage: store.restSafe ? "hand.raised.fill" : "hand.draw")
+                .font(.system(size: 13, weight: .semibold))
+                .padding(.horizontal, 5)
+                .frame(minHeight: 40)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(store.restSafe ? teal : .orange)
+        .accessibilityHint("RestSafe prevents unintended palm and finger navigation; tap to switch to two-finger navigation")
+    }
+
+    private var header: some View {
+        HStack(spacing: 9) {
+            HStack(spacing: 9) {
+                Button { showArtStudio = true } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: "infinity")
+                            .font(.system(size: 23, weight: .medium))
+                        Text("Infini Canvas")
+                            .font(.system(size: 15, weight: .semibold))
+                            .lineLimit(1)
+                        Image(systemName: "paintpalette")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundStyle(teal)
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Open the separately saved layered Art Studio")
+            }
+            Spacer(minLength: 4)
+            historyButtons
+            palmModeButton
+            Menu {
+                Button("Overview · 14%", systemImage: "square.dashed") { store.zoomToOverview() }
+                Button("Writing · 100%", systemImage: "pencil") { store.zoomToWriting() }
+                Button("Zoom out further", systemImage: "minus.magnifyingglass") { store.zoomBy(0.4) }
+                Button("Zoom in", systemImage: "plus.magnifyingglass") { store.zoomBy(2.5) }
+            } label: {
+                Image(systemName: "square.dashed.inset.filled")
+                    .frame(width: 36, height: 40)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Zoom to overview")
+            Button { showLibrary = true } label: {
+                Image(systemName: "square.stack.3d.up")
+                    .frame(width: 36, height: 40)
+                    .overlay(alignment: .topTrailing) {
+                        if !store.dueClips.isEmpty {
+                            Circle().fill(.orange).frame(width: 7, height: 7).offset(x: -1, y: 3)
+                        }
+                    }
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Open clip and study library")
+            if store.focusedArea != nil {
+                Button { store.revealAllAreas() } label: {
+                    Label("Reveal", systemImage: "eye")
+                        .font(.caption.weight(.semibold))
+                }.buttonStyle(.bordered)
+            }
+            moreMenu
+        }
+        .padding(.horizontal, 13)
+        .padding(.vertical, 7)
+        .background(.regularMaterial)
+        .simultaneousGesture(DragGesture(minimumDistance: 25).onEnded { value in
+            if value.translation.height < -30 && abs(value.translation.width) < 110 {
+                withAnimation(.easeOut(duration: 0.22)) { showTopBar = false }
+            }
+        })
+        .overlay(alignment: .bottom) { Rectangle().fill(.black.opacity(0.05)).frame(height: 0.5) }
+    }
+
+    // Uncommon actions belong in menus, not between the Pencil and undo controls.
+    private var moreMenu: some View {
+        Menu {
+            Button("Auto-label nearby handwriting", systemImage: "text.magnifyingglass") { store.autoNameAndAddArea() }
+            Button("Manually name area", systemImage: "mappin.and.ellipse") { showAddArea = true }
+            Menu("Isolate one area", systemImage: "eye") {
+                Button("Show all writing", systemImage: "eye.fill") { store.revealAllAreas() }
+                ForEach(store.activeAreas) { area in
+                    Button(area.title) { store.focusOnArea(area) }
+                }
+            }
+            Button("Open layered Art Studio", systemImage: "paintpalette") { showArtStudio = true }
+            Button("New typed note", systemImage: "textformat") { openTextEditor() }
+            Button("Organize saved clips", systemImage: "square.grid.2x2") { store.prepareOrganization() }
+            Button("Lecture recordings", systemImage: "waveform") { showLectures = true }
+            if store.recording {
+                Button("Mark lecture moment", systemImage: "bookmark") { store.addLectureMark() }
+                Button("Stop recording", systemImage: "stop.circle") { store.endLectureRecording() }
+            } else {
+                Button("Start lecture recording", systemImage: "record.circle") { store.beginLectureRecording() }
+            }
+            Divider()
+            Menu("Paper style", systemImage: store.paper.symbol) {
+                ForEach(PaperStyle.allCases) { style in
+                    Button { store.paper = style } label: {
+                        Label(style.rawValue, systemImage: style.symbol)
+                    }
+                }
+            }
+            Button("Toggle ruler", systemImage: "ruler") { store.toggleRuler() }
+            Button("Apple Pencil palette", systemImage: "paintpalette") { store.showSystemTools() }
+            Button("Minimal writing controls", systemImage: "arrow.up.left.and.arrow.down.right") { focusMode = true }
+            Button("Hide top command bar", systemImage: "chevron.up") { showTopBar = false }
+            Button("Hide all menus", systemImage: "rectangle.dashed") { paperOnly = true }
+            if !store.organizedUndo.isEmpty {
+                Button("Undo last organization", systemImage: "arrow.uturn.backward") { store.undoOrganization() }
+            }
+            Divider()
+            Button("ChatGPT destination & preferences", systemImage: "gearshape") { showSettings = true }
+            Button("Export complete backup", systemImage: "square.and.arrow.up") { shareBackup() }
+            Button("Import complete backup", systemImage: "square.and.arrow.down") { importing = true }
+            if !store.automaticBackupFiles.isEmpty {
+                Menu("Restore automatic backup", systemImage: "externaldrive") {
+                    ForEach(store.automaticBackupFiles, id: \.self) { url in
+                        Button(url.deletingPathExtension().lastPathComponent) {
+                            selectedAutoBackup = url; confirmAutoBackup = true
+                        }
+                    }
+                }
+            }
+            if !store.revisionFiles.isEmpty {
+                Menu("Restore earlier ink", systemImage: "clock.arrow.circlepath") {
+                    ForEach(store.revisionFiles, id: \.self) { url in
+                        Button(url.deletingPathExtension().lastPathComponent) {
+                            selectedRevision = url; confirmRevision = true
+                        }
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 19, weight: .medium))
+                .frame(width: 38, height: 40)
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel("More actions and settings")
+    }
+
+    private var focusHeader: some View {
+        HStack(spacing: 10) {
+            historyButtons
+            palmModeButton
+            Spacer(minLength: 0)
+            Label(store.isSaved ? "Saved" : "Saving", systemImage: store.isSaved ? "checkmark.circle.fill" : "clock")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+            Button { focusMode = false } label: {
+                Image(systemName: "rectangle.expand.vertical")
+                    .frame(width: 36, height: 40)
+            }
+            .accessibilityLabel("Show drawing tools")
+        }
+        .padding(.horizontal, 13)
+        .padding(.vertical, 7)
+        .background(.regularMaterial)
+    }
+
+    private var toolShelf: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(CanvasTool.allCases) { tool in
+                    Button { store.tool = tool } label: {
+                        VStack(spacing: 3) {
+                            Image(systemName: tool.symbol).font(.system(size: 20, weight: .medium))
+                            Text(tool.rawValue).font(.system(size: 10, weight: .medium))
+                        }
+                        .frame(minWidth: 57, minHeight: 48)
+                        .foregroundStyle(store.tool == tool ? .white : Color.primary)
+                        .background(store.tool == tool ? teal : Color.clear, in: RoundedRectangle(cornerRadius: 11))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(tool.rawValue)
+                }
+                Rectangle().fill(.black.opacity(0.09)).frame(width: 1, height: 28).padding(.horizontal, 7)
+                ForEach(swatches.indices.prefix(5), id: \.self) { i in
+                    Button {
+                        store.inkColor = swatches[i].1
+                        if store.tool == .eraser || store.tool == .capture { store.tool = .pen }
+                    } label: {
+                        Circle()
+                            .fill(Color(uiColor: swatches[i].1))
+                            .frame(width: 22, height: 22)
+                            .padding(5)
+                            .overlay(Circle().stroke(teal.opacity(0.9), lineWidth: store.inkColor.isEqual(swatches[i].1) ? 2 : 0).padding(1))
+                            .frame(width: 36, height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Ink color: \(swatches[i].0)")
+                }
+                ColorPicker("More colors", selection: Binding(
+                    get: { Color(uiColor: store.inkColor) },
+                    set: { store.inkColor = UIColor($0) }
+                ), supportsOpacity: false)
+                .labelsHidden()
+                .frame(width: 40)
+                Rectangle().fill(.black.opacity(0.09)).frame(width: 1, height: 28).padding(.horizontal, 7)
+                if store.tool == .marker {
+                    Button { showHighlighterOptions = true } label: {
+                        Label(store.fixedHighlighter ? "Vertical nib" : "Native marker", systemImage: "highlighter")
+                            .font(.caption.weight(.medium))
+                            .frame(minHeight: 40)
+                    }
+                    .buttonStyle(.bordered)
+                    .popover(isPresented: $showHighlighterOptions, arrowEdge: .bottom) {
+                        VStack(alignment: .leading, spacing: 14) {
+                            Text("Highlighter tip").font(.headline)
+                            Toggle("Lock nib vertically", isOn: $store.fixedHighlighter)
+                            Text("Fixed nib records each stroke as editable PencilKit ink. Native mode follows Apple's marker rendering and Pencil tilt.")
+                                .font(.caption).foregroundStyle(.secondary)
+                            if store.fixedHighlighter {
+                                Text("Nib height · \(Int(store.markerHeight)) pt").font(.caption)
+                                Slider(value: Binding(get: { Double(store.markerHeight) },
+                                    set: { store.markerHeight = CGFloat($0) }), in: 8...45)
+                                Text("Nib width · \(Int(store.markerWidth)) pt").font(.caption)
+                                Slider(value: Binding(get: { Double(store.markerWidth) },
+                                    set: { store.markerWidth = CGFloat($0) }), in: 2...15)
+                            }
+                        }
+                        .padding(18).frame(width: 315)
+                    }
+                }
+                if store.tool == .eraser {
+                    Button { showEraserOptions = true } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "eraser")
+                            Text(store.eraserPrecision == .detail ? "Detail" : "Stroke")
+                        }.frame(minWidth: 78, minHeight: 42)
+                    }
+                    .buttonStyle(.bordered)
+                    .popover(isPresented: $showEraserOptions, arrowEdge: .bottom) {
+                        VStack(alignment: .leading, spacing: 13) {
+                            Text("Eraser").font(.headline)
+                            Picker("Erase mode", selection: $store.eraserPrecision) {
+                                ForEach(EraserPrecision.allCases) { precision in
+                                    Text(precision.rawValue).tag(precision)
+                                }
+                            }.pickerStyle(.segmented)
+                            Text(store.eraserPrecision == .detail ? "Remove small parts of a stroke" : "Erase entire strokes in one pass")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Slider(value: Binding(get: { Double(store.eraserWidth) },
+                                set: { store.eraserWidth = CGFloat($0) }), in: 3...60)
+                            Text("Eraser size: \(Int(store.eraserWidth))").font(.caption)
+                        }.padding(18).frame(width: 290)
+                    }
+                }
+                if store.mode == .art {
+                    Menu {
+                        Button("Detail brush · 0.8", systemImage: "paintbrush.pointed") { store.tool = .pen; store.strokeWidth = 0.8 }
+                        Button("Inking brush · 3", systemImage: "pencil.tip") { store.tool = .pen; store.strokeWidth = 3 }
+                        Button("Painter brush · 15", systemImage: "paintbrush") { store.tool = .pencil; store.strokeWidth = 15 }
+                        Button("Broad brush · 45", systemImage: "paintbrush.fill") { store.tool = .marker; store.strokeWidth = 11 }
+                    } label: {
+                        Label("Brushes", systemImage: "paintbrush.pointed.fill")
+                    }.buttonStyle(.bordered)
+                }
+                Button { showStrokeOptions = true } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "lineweight")
+                        Text(String(format: "%.1f", Double(store.strokeWidth)))
+                            .font(.caption.monospacedDigit())
+                    }
+                    .frame(minWidth: 68, minHeight: 42)
+                }
+                .buttonStyle(.bordered)
+                .accessibilityLabel("Pen thickness")
+                .popover(isPresented: $showStrokeOptions, arrowEdge: .bottom) {
+                    VStack(alignment: .leading, spacing: 18) {
+                        Text(store.mode == .art ? "Brush size" : "Pen thickness").font(.headline)
+                        if store.tool == .pen {
+                            Picker("Pen profile", selection: $store.penProfile) {
+                                ForEach(PenProfile.allCases) { profile in Text(profile.rawValue).tag(profile) }
+                            }
+                            .pickerStyle(.segmented)
+                        }
+                        Slider(value: Binding(
+                            get: { Double(store.strokeWidth) },
+                            set: { store.strokeWidth = CGFloat($0) }), in: 0.4...(store.mode == .art ? 80 : 18))
+                        HStack {
+                            ForEach([1.3, 2.5, 5.0, 9.0], id: \.self) { width in
+                                Button { store.strokeWidth = CGFloat(width) } label: {
+                                    Circle().fill(teal).frame(width: max(4, width * 1.6), height: max(4, width * 1.6))
+                                        .frame(width: 38, height: 38)
+                                }
+                                .buttonStyle(.bordered)
+                                .accessibilityLabel("Set thickness to \(width)")
+                            }
+                        }
+                    }
+                    .padding(20)
+                    .frame(width: 280)
+                    .presentationCompactAdaptation(.popover)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+        }
+        .background(Color(red: 0.964, green: 0.967, blue: 0.962))
+    }
+
+    private var textNoteCards: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .topLeading) {
+                ForEach(store.activeTextNotes.filter { note in
+                    guard let area = store.focusedArea else { return true }
+                    return abs(note.x - area.x) <= (area.width ?? 2400) / 2 &&
+                           abs(note.y - area.y) <= (area.height ?? 1600) / 2
+                }) { note in
+                    let p = CGPoint(x: CGFloat(note.x) * store.zoom - store.offset.x,
+                                    y: CGFloat(note.y) * store.zoom - store.offset.y)
+                    if p.x > -300 && p.y > -200 && p.x < geometry.size.width + 300 && p.y < geometry.size.height + 200 {
+                        Text(note.body)
+                            .font(.system(size: max(10, min(21, 17 * store.zoom))))
+                            .foregroundStyle(Color(red: 0.12, green: 0.17, blue: 0.20))
+                            .frame(width: max(110, min(450, 250 * store.zoom)), alignment: .leading)
+                            .padding(10)
+                            .background(Color.white.opacity(0.92), in: RoundedRectangle(cornerRadius: 9))
+                            .overlay(RoundedRectangle(cornerRadius: 9).stroke(.teal.opacity(0.25)))
+                            .onTapGesture { openTextEditor(note) }
+                            .contextMenu {
+                                Button("Edit", systemImage: "pencil") { openTextEditor(note) }
+                                Button(role: .destructive) { store.trashTextNote(note) } label: {
+                                    Label("Move to Trash", systemImage: "trash")
+                                }
+                            }
+                            .gesture(DragGesture(minimumDistance: 8).onEnded { value in
+                                store.moveTextNote(note, delta: value.translation)
+                            })
+                            .position(x: p.x, y: p.y)
+                    }
+                }
+            }
+        }
+    }
+    private func openTextEditor(_ note: TypedNote? = nil) {
+        editingNote = note
+        textDraft = note?.body ?? ""
+        showTextEditor = true
+    }
+
+    private var areaPins: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .topLeading) {
+                ForEach(store.activeAreas.filter { store.focusAreaID == nil || $0.id == store.focusAreaID }) { area in
+                    let p = store.screenPoint(for: area)
+                    if p.x > -120 && p.y > 0 && p.x < geometry.size.width + 120 && p.y < geometry.size.height {
+                        Button { store.goToArea(area); store.zoomToWriting() } label: {
+                            Label(area.title, systemImage: "mappin.circle.fill")
+                                .font(.caption.weight(.semibold))
+                                .lineLimit(1)
+                                .padding(.horizontal, 12).padding(.vertical, 7)
+                                .foregroundStyle(teal)
+                                .background(.regularMaterial, in: Capsule())
+                                .overlay(Capsule().stroke(teal.opacity(0.16)))
+                        }
+                        .buttonStyle(.plain)
+                        .position(x: p.x, y: p.y)
+                    }
+                }
+            }
+        }
+    }
+
+    private var semanticOverview: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .topLeading) {
+                ForEach(store.activeAreas.filter { store.focusAreaID == nil || $0.id == store.focusAreaID }) { area in
+                    let p = store.screenPoint(for: area)
+                    if p.x > -170 && p.y > -100 && p.x < geometry.size.width + 170 && p.y < geometry.size.height + 100 {
+                        Button {
+                            store.goToArea(area)
+                            store.zoomToWriting()
+                        } label: {
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack {
+                                    Image(systemName: "rectangle.3.group")
+                                    Text(CanvasStore.category(for: area.title))
+                                        .font(.caption2.weight(.heavy)).tracking(0.7)
+                                }.foregroundStyle(teal)
+                                Text(area.title).font(.subheadline.weight(.semibold)).lineLimit(2)
+                                Text("\(store.clipsNear(area)) saved clips · zoom in to write")
+                                    .font(.caption2).foregroundStyle(.secondary)
+                            }
+                            .frame(width: 182, alignment: .leading)
+                            .padding(12)
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                            .overlay(RoundedRectangle(cornerRadius: 14).stroke(teal.opacity(0.35)))
+                        }.buttonStyle(.plain)
+                        .position(x: p.x, y: p.y)
+                    }
+                }
+            }
+        }
+    }
+
+    private var lassoActions: some View {
+        VStack(spacing: 8) {
+            Text("Circle with Pencil → clip automatically saved. Palm and finger touches ignored.")
+                .font(.caption).foregroundStyle(.secondary)
+            if store.selectionActive, let clip = store.latestClip {
+                HStack(spacing: 8) {
+                    Label("Captured", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green).font(.caption.weight(.semibold))
+                    Button("Copy") { store.copyClip(clip) }.buttonStyle(.bordered)
+                    Button("Share") { shareURL = store.clipURL(clip); showShare = true }.buttonStyle(.bordered)
+                    Button("Open GPT") { openSpecificChat(clip) }.buttonStyle(.borderedProminent)
+                    Button("Study prompt") { store.copyStudyPrompt(clip) }.buttonStyle(.bordered)
+                    Button("Make area") { store.makeAreaFromSelection() }.buttonStyle(.bordered)
+                    Menu {
+                        if store.activeAreas.isEmpty { Text("Mark an area first") }
+                        ForEach(store.activeAreas) { area in
+                            Button(area.title) { store.moveSelection(to: area) }
+                        }
+                    } label: { Label("Move to area", systemImage: "arrowshape.turn.up.right") }.buttonStyle(.bordered)
+                    Button(role: .destructive) { store.deleteSelection() } label: { Image(systemName: "trash") }
+                        .buttonStyle(.bordered)
+                }.font(.caption)
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 11)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .padding(.horizontal, 18).padding(.bottom, 7)
+    }
+
+    private var footer: some View {
+        HStack(spacing: 8) {
+            Image(systemName: store.isSaved ? "checkmark.shield.fill" : "clock")
+                .foregroundStyle(store.isSaved ? .green : .orange)
+            Text(store.status)
+                .lineLimit(1)
+            Spacer(minLength: 10)
+            Text(String(format: "%.1f%% zoom", Double(store.zoom * 100)))
+                .font(.caption.monospacedDigit())
+            Text(store.restSafe ? "Palm guard on" : "Two-finger navigation")
+                .foregroundStyle(.secondary)
+        }
+        .font(.caption)
+        .padding(.horizontal, 16).padding(.vertical, 8)
+        .background(.regularMaterial)
+    }
+
+    private func shareBackup() {
+        if let url = store.exportCompleteBackup() { shareURL = url; showShare = true }
+    }
+    private func openSpecificChat(_ clip: SavedClip) {
+        store.copyClip(clip)
+        let address = targetChatURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let url = URL(string: address), url.scheme == "https", ["chatgpt.com", "www.chatgpt.com"].contains(url.host ?? "") {
+            UIApplication.shared.open(url)
+        } else { showSettings = true }
+    }
+}
+
+struct ChatDestinationView: View {
+    @ObservedObject var store: CanvasStore
+    @Environment(\.dismiss) private var dismiss
+    @Binding var conversationURL: String
+    @Binding var showAreaPins: Bool
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Open a particular ChatGPT chat") {
+                    TextField("https://chatgpt.com/c/…", text: $conversationURL)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                    Text("Lasso saves the clip as a PNG plus editable PencilKit ink. Open GPT copies that PNG and opens your existing conversation, but you must paste/attach it yourself.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                Section("Palm protection") {
+                    Label("RestSafe blocks finger panning; wide two-finger spreads still zoom", systemImage: "hand.raised.fill")
+                    Toggle("Enable Pencil double-tap and squeeze shortcuts", isOn: $store.pencilShortcutsEnabled)
+                    Text("Off by default so an accidental squeeze or double-tap won't switch your pen or open the tool palette.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Text("RestSafe zoom needs fingers at least 150 pt apart and 35 pt of spreading. Navigate allows normal two-finger gestures. iPadOS system corner gestures are controlled in Settings.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                Section("Highlighter and interface") {
+                    Toggle("Fixed vertical highlighter nib", isOn: $store.fixedHighlighter)
+                    Text("Swipe up on the top command bar to hide it. Swipe down on the little top-edge grip to show it. Double-tap the right-edge handle for paper-only mode.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                Section("Canvas") {
+                    Toggle("Show area labels when zoomed out", isOn: $showAreaPins)
+                    Text("Auto-label nearby handwriting uses on-device text recognition; suggested names can be renamed. Isolate an area temporarily hides everything outside its rectangular focus, but does not delete ink. Native Apple Ruler is movable and rotatable using two fingers.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Text("Semantic zoom shows your areas as cards. Organize previews proposed clip course tags, then changes them only after approval. It never rearranges your actual ink. With Lasso, Move to area repositions selected strokes.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                Section("Data protection") {
+                    Label("Ink autosaves locally", systemImage: "checkmark.shield")
+                    Label("Complete JSON backup includes clips and vectors", systemImage: "archivebox")
+                    Text("This prototype does not synchronize automatically across devices. Store important backups in Files or iCloud Drive. Local Vision handwriting search is best effort.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("Preferences")
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+    }
+}
