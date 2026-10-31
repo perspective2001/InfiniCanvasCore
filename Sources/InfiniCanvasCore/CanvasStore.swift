@@ -304,8 +304,12 @@ final class CanvasStore: ObservableObject {
         // single-finger scrolling and two-finger pinch on the main canvas.
         view.isScrollEnabled = true
         view.panGestureRecognizer.minimumNumberOfTouches = 1
+        // RestSafe constrains panning to a deliberate single finger; when off,
+        // Navigate also permits two-finger panning. Native pinch remains enabled.
+        view.panGestureRecognizer.maximumNumberOfTouches = restSafe ? 1 : 2
         configureNavigationRecognizers(view)
-        status = "Pencil-only ink · finger to pan · pinch to zoom"
+        status = restSafe ? "RestSafe · one finger pans · two fingers zoom" :
+                            "Navigate · one/two fingers pan · pinch to zoom"
     }
 
     private func configureNavigationRecognizers(_ view: PKCanvasView) {
