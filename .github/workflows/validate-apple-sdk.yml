@@ -24,6 +24,29 @@ jobs:
         run: |
           xcodebuild -version
           xcodebuild -list
+      - name: Resolve public version as a fresh dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/infini-consumer/Sources/InfiniConsumer
+          cat > /tmp/infini-consumer/Package.swift <<'EOF'
+          // swift-tools-version: 5.9
+          import PackageDescription
+          let package = Package(
+              name: "InfiniConsumer",
+              platforms: [.iOS("17.5")],
+              dependencies: [
+                  .package(url: "https://github.com/perspective2001/InfiniCanvasCore.git", from: "1.0.0")
+              ],
+              targets: [
+                  .executableTarget(name: "InfiniConsumer", dependencies: ["InfiniCanvasCore"])
+              ]
+          )
+          EOF
+          echo 'import InfiniCanvasCore' > /tmp/infini-consumer/Sources/InfiniConsumer/main.swift
+          cd /tmp/infini-consumer
+          swift package resolve
+          swift package show-dependencies
       - name: Compile for iPad simulator
         run: |
           set -o pipefail
