@@ -6,6 +6,7 @@ on:
     paths:
       - 'Sources/**'
       - 'Tests/**'
+      - 'IntegrationHost/**'
       - 'Package.swift'
       - '.github/workflows/validate-apple-sdk.yml'
   pull_request:
@@ -13,6 +14,7 @@ on:
     paths:
       - 'Sources/**'
       - 'Tests/**'
+      - 'IntegrationHost/**'
       - 'Package.swift'
       - '.github/workflows/validate-apple-sdk.yml'
   workflow_dispatch:
@@ -21,13 +23,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: qa-repaired-zoom-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  group: qa-current-sdk-${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
   compile:
-    runs-on: macos-15
-    timeout-minutes: 10
+    runs-on: xcode-27
+    timeout-minutes: 22
     steps:
       - name: Check out source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -70,10 +72,19 @@ jobs:
           set -o pipefail
           xcodebuild -scheme InfiniCanvasCore -destination 'generic/platform=iOS Simulator' -derivedDataPath /tmp/InfiniCanvasBuild CODE_SIGNING_ALLOWED=NO build 2>&1 | tee /tmp/infini-build.log
       - name: Run native PencilKit regression tests
-        timeout-minutes: 4
+        timeout-minutes: 8
         run: |
           set -euo pipefail
           SIMULATOR_ID="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; all=[x for a in d.values() for x in a if x.get("isAvailable",True)]; pick=next((x for x in all if "iPad" in x["name"]), next((x for x in all if "iPhone" in x["name"]), None)); print(pick["udid"] if pick else "")')"
           if [ -z "$SIMULATOR_ID" ]; then echo "No available Apple iOS simulator" >&2; exit 1; fi
           echo "Running tests on simulator $SIMULATOR_ID"
           xcodebuild -scheme InfiniCanvasCore -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath /tmp/InfiniCanvasTests CODE_SIGNING_ALLOWED=NO test 2>&1 | tee /tmp/infini-tests.log
+      - name: Compile same Swift Playgrounds application host against current PR package
+        timeout-minutes: 6
+        run: |
+          set -euo pipefail
+          cd IntegrationHost/InfiniCanvasPermanent.swiftpm
+          echo "Checking real app-host manifest against local checkout of InfiniCanvasCore"
+          swift package dump-package > /tmp/infini-app-manifest.json
+          xcodebuild -list -json | tee /tmp/infini-host-schemes.json
+          xcodebuild -scheme "Infini Canvas" -destination 'generic/platform=iOS Simulator' -derivedDataPath /tmp/InfiniHostBuild CODE_SIGNING_ALLOWED=NO build 2>&1 | tee /tmp/infini-host-build.log
