@@ -1,22 +1,57 @@
 name: Publish Swift package version tag
+
 on:
   push:
     branches: [main]
     paths:
       - SWIFT_PACKAGE_VERSION
-      - .github/workflows/publish-swift-package.yml
+
 permissions:
   contents: write
+  actions: read
+
 jobs:
   tag-package:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - name: Check out repository
+      - name: Check out repository with all tags
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           fetch-depth: 0
           persist-credentials: true
-      - name: Validate and publish version
+      - name: Require a dedicated version-only commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          CHANGES="$(git diff --name-only HEAD^ HEAD)"
+          if [ "$CHANGES" != "SWIFT_PACKAGE_VERSION" ]; then
+            echo "Refusing tag: release commit must change ONLY SWIFT_PACKAGE_VERSION (actual: $CHANGES)" >&2
+            exit 1
+          fi
+          echo "VERIFIED_SOURCE_SHA=$(git rev-parse HEAD^)" >> "$GITHUB_ENV"
+      - name: Require successful Apple SDK + host CI on exact source commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 45); do
+            result="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${VERIFIED_SOURCE_SHA}&per_page=100")"
+            if echo "$result" | jq -e '[.workflow_runs[] | select(.name=="Validate Infini Canvas on Apple SDK" and .event=="push" and .head_sha==env.VERIFIED_SOURCE_SHA and .status=="completed" and .conclusion=="success")] | length > 0' >/dev/null; then
+              echo "Validated exact source commit ${VERIFIED_SOURCE_SHA}"
+              exit 0
+            fi
+            if echo "$result" | jq -e '[.workflow_runs[] | select(.name=="Validate Infini Canvas on Apple SDK" and .event=="push" and .head_sha==env.VERIFIED_SOURCE_SHA and .status=="completed" and .conclusion=="failure")] | length > 0' >/dev/null; then
+              echo "Source CI failed. Refusing to publish." >&2
+              exit 1
+            fi
+            echo "Awaiting current Apple SDK, simulator and host CI: ${attempt}/45"
+            sleep 20
+          done
+          echo "Source never obtained green CI. No tag published." >&2
+          exit 1
+      - name: Publish immutable semantic version tag
         shell: bash
         run: |
           set -euo pipefail
@@ -26,7 +61,7 @@ jobs:
             exit 1
           fi
           if git ls-remote --exit-code --tags origin "refs/tags/$VERSION" >/dev/null 2>&1; then
-            echo "Package tag $VERSION already exists"
+            echo "Tag $VERSION already exists; never overwrite release history"
             exit 0
           fi
           git config user.name "github-actions[bot]"

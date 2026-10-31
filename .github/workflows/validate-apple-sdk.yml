@@ -6,6 +6,7 @@ on:
     paths:
       - 'Sources/**'
       - 'Tests/**'
+      - 'IntegrationHost/**'
       - 'Package.swift'
       - '.github/workflows/validate-apple-sdk.yml'
   pull_request:
@@ -13,6 +14,7 @@ on:
     paths:
       - 'Sources/**'
       - 'Tests/**'
+      - 'IntegrationHost/**'
       - 'Package.swift'
       - '.github/workflows/validate-apple-sdk.yml'
   workflow_dispatch:
@@ -21,59 +23,77 @@ permissions:
   contents: read
 
 concurrency:
-  group: qa-repaired-zoom-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  group: quality-v2-${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  compile:
-    runs-on: macos-15
-    timeout-minutes: 10
+  current-playgrounds-sdk:
+    # Swift Playground 4.7's published SDK is iOS 26. Test the compiler family
+    # user's actual iPad editor can use, not only future Xcode 27 SDKs.
+    name: Existing iPad Playground SDK and PencilKit tests
+    runs-on: macos-26
+    timeout-minutes: 18
     steps:
-      - name: Check out source
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
-      - name: Confirm Xcode and available schemes
-        run: |
-          xcodebuild -version
-          xcodebuild -list
-      - name: Resolve public version as a fresh dependency
-        shell: bash
+      - name: SDK versions
+        run: xcodebuild -version
+      - name: Geometric zoom/lasso invariants
         run: |
           set -euo pipefail
-          mkdir -p /tmp/infini-consumer/Sources/InfiniConsumer
-          cat > /tmp/infini-consumer/Package.swift <<'EOF'
-          // swift-tools-version: 5.9
-          import PackageDescription
-          let package = Package(
-              name: "InfiniConsumer",
-              platforms: [.iOS("17.5")],
-              dependencies: [
-                  .package(url: "https://github.com/perspective2001/InfiniCanvasCore.git", from: "1.0.0")
-              ],
-              targets: [
-                  .executableTarget(name: "InfiniConsumer", dependencies: ["InfiniCanvasCore"])
-              ]
-          )
-          EOF
-          echo 'import InfiniCanvasCore' > /tmp/infini-consumer/Sources/InfiniConsumer/main.swift
-          cd /tmp/infini-consumer
-          swift package resolve
-          swift package show-dependencies
-      - name: Validate canvas geometry at all supported zoom levels
+          swiftc Sources/InfiniCanvasCore/CanvasGeometry.swift Tests/GeometrySmoke/GeometrySmoke.swift -o /tmp/geometry-smoke
+          /tmp/geometry-smoke
+      - name: Compile package against iPad Simulator SDK
         run: |
           set -euo pipefail
-          swiftc Sources/InfiniCanvasCore/CanvasGeometry.swift Tests/GeometrySmoke/GeometrySmoke.swift -o /tmp/infini-geometry-smoke
-          /tmp/infini-geometry-smoke
-      - name: Compile for iPad simulator
-        run: |
-          set -o pipefail
-          xcodebuild -scheme InfiniCanvasCore -destination 'generic/platform=iOS Simulator' -derivedDataPath /tmp/InfiniCanvasBuild CODE_SIGNING_ALLOWED=NO build 2>&1 | tee /tmp/infini-build.log
-      - name: Run native PencilKit regression tests
-        timeout-minutes: 4
+          xcodebuild -scheme InfiniCanvasCore -destination 'generic/platform=iOS Simulator' -derivedDataPath /tmp/InfiniCore26 CODE_SIGNING_ALLOWED=NO build
+      - name: Test actual SwiftUI root, PencilKit and persistence
+        timeout-minutes: 9
         run: |
           set -euo pipefail
           SIMULATOR_ID="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; all=[x for a in d.values() for x in a if x.get("isAvailable",True)]; pick=next((x for x in all if "iPad" in x["name"]), next((x for x in all if "iPhone" in x["name"]), None)); print(pick["udid"] if pick else "")')"
-          if [ -z "$SIMULATOR_ID" ]; then echo "No available Apple iOS simulator" >&2; exit 1; fi
-          echo "Running tests on simulator $SIMULATOR_ID"
-          xcodebuild -scheme InfiniCanvasCore -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath /tmp/InfiniCanvasTests CODE_SIGNING_ALLOWED=NO test 2>&1 | tee /tmp/infini-tests.log
+          if [ -z "$SIMULATOR_ID" ]; then echo "No iOS Simulator" >&2; exit 1; fi
+          xcodebuild -scheme InfiniCanvasCore -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath /tmp/InfiniCoreTests26 CODE_SIGNING_ALLOWED=NO test
+
+  modern-sdk-and-host:
+    name: Xcode 27 actual Swift Playgrounds host integration
+    runs-on: xcode-27
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Confirm modern SDK
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphonesimulator --show-sdk-version
+      - name: Compile core with Xcode 27
+        run: |
+          set -euo pipefail
+          xcodebuild -scheme InfiniCanvasCore -destination 'generic/platform=iOS Simulator' -derivedDataPath /tmp/InfiniCore27 CODE_SIGNING_ALLOWED=NO build
+      - name: Validate Playgrounds host identity and native app manifest
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('IntegrationHost/InfiniCanvasPermanent.swiftpm/Package.swift').read_text()
+          a=Path('IntegrationHost/InfiniCanvasPermanent.swiftpm/Sources/InfiniCanvasApp.swift').read_text()
+          project=Path('IntegrationHost/project.yml').read_text()
+          for required in ['import AppleProductTypes', 'com.perspective2001.infini-canvas.native',
+                           'microphone(', 'InfiniCanvasCore', '17.5']:
+              assert required in p, f'Missing expected host manifest field: {required}'
+          for required in ['import InfiniCanvasCore', '@main', 'InfiniCanvasRootView()']:
+              assert required in a, f'Missing app entry-point symbol: {required}'
+          assert 'InfiniCanvasPermanent.swiftpm/Sources/InfiniCanvasApp.swift' in project
+          assert 'com.perspective2001.infini-canvas.native' in project
+          print('PASS: native host entry point, bundle ID, minimum iOS and permissions')
+          PY
+      - name: Build real native iPad application entrypoint with the package
+        timeout-minutes: 7
+        run: |
+          set -euo pipefail
+          brew install xcodegen
+          cd IntegrationHost
+          xcodegen generate
+          xcodebuild -project InfiniCanvasHost.xcodeproj -scheme InfiniCanvasHost -destination 'generic/platform=iOS Simulator' -derivedDataPath /tmp/InfiniHost27 CODE_SIGNING_ALLOWED=NO build

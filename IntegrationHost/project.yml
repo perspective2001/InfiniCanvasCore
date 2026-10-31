@@ -1,0 +1,38 @@
+# CI-only Xcode project: compiles the user's exact app entry point as a native
+# iOS application using the CURRENT pull-request version of InfiniCanvasCore.
+# The Swift Playgrounds AppleProductTypes package manifest itself can only be
+# built by the Swift Playgrounds toolchain, not vanilla macOS SwiftPM.
+name: InfiniCanvasHost
+options:
+  bundleIdPrefix: com.perspective2001
+packages:
+  InfiniCanvasCore:
+    path: ..
+settings:
+  base:
+    IPHONEOS_DEPLOYMENT_TARGET: '17.5'
+    SWIFT_VERSION: '5.0'
+targets:
+  InfiniCanvasHost:
+    type: application
+    platform: iOS
+    sources:
+      - InfiniCanvasPermanent.swiftpm/Sources/InfiniCanvasApp.swift
+    dependencies:
+      - package: InfiniCanvasCore
+        product: InfiniCanvasCore
+    info:
+      path: Generated/InfiniCanvasHost-Info.plist
+      properties:
+        CFBundleDisplayName: 'Infini Canvas'
+        NSMicrophoneUsageDescription: 'Record lectures only when you press Record and connect audio to handwritten notes.'
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+          - UIInterfaceOrientationPortrait
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.perspective2001.infini-canvas.native
+        TARGETED_DEVICE_FAMILY: '2'
+        GENERATE_INFOPLIST_FILE: 'NO'
+        CODE_SIGNING_ALLOWED: 'NO'
