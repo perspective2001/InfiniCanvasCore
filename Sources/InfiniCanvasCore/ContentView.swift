@@ -332,8 +332,7 @@ struct ContentView: View {
                 Button("Writing · 100%", systemImage: "pencil") { store.zoomToWriting() }
                 Button("Zoom out further", systemImage: "minus.magnifyingglass") { store.zoomBy(0.4) }
                 Button("Zoom in", systemImage: "plus.magnifyingglass") { store.zoomBy(2.5) }
-                Button("Exact 2400% zoom", systemImage: "plus.viewfinder") { store.zoomTo(24) }
-                Button("Exact 3200% zoom", systemImage: "plus.circle") { store.zoomTo(32) }
+                Button("Exact 1000% zoom · native maximum", systemImage: "plus.viewfinder") { store.zoomTo(10) }
             } label: {
                 Image(systemName: "square.dashed.inset.filled")
                     .frame(width: 36, height: 40)
