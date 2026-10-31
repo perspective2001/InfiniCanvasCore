@@ -112,7 +112,11 @@ final class CanvasCoreTests: XCTestCase {
     }
 
     func testActualRootViewLaunchesWithVisibleControlsAndCanvas() async throws {
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        let window = scene.map { UIWindow(windowScene: $0) } ??
+                     UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
+        window.frame = CGRect(x: 0, y: 0, width: 1024, height: 768)
+        print("APP_TEST sceneAttached=\(window.windowScene != nil)")
         let host = UIHostingController(rootView: InfiniCanvasRootView())
         window.rootViewController = host
         window.makeKeyAndVisible()
@@ -134,6 +138,7 @@ final class CanvasCoreTests: XCTestCase {
         guard let canvas = canvases.first else { return }
         XCTAssertGreaterThan(canvas.bounds.width, 600)
         XCTAssertGreaterThan(canvas.bounds.height, 400)
+        print("APP_TEST hostFrame=\(host.view.frame) canvasFrame=\(canvas.frame)")
         XCTAssertEqual(canvas.drawingPolicy, .pencilOnly)
         XCTAssertTrue(canvas.isScrollEnabled)
 
@@ -143,7 +148,8 @@ final class CanvasCoreTests: XCTestCase {
         format.scale = 0.25
         let renderer = UIGraphicsImageRenderer(size: window.bounds.size, format: format)
         let snapshot = renderer.image { _ in
-            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            let drawn = window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            print("APP_TEST drawHierarchy=\(drawn)")
         }
         guard let cgImage = snapshot.cgImage, let data = cgImage.dataProvider?.data else {
             XCTFail("App root did not produce a screenshot"); return
@@ -164,6 +170,14 @@ final class CanvasCoreTests: XCTestCase {
                     }
                 }
             }
+        }
+        print("APP_TEST upperControlsNonblank=\(varied)")
+        // Emit a very small thumbnail only for launch regression diagnosis.
+        let thumb = UIGraphicsImageRenderer(size: CGSize(width: 160, height: 120)).image { _ in
+            snapshot.draw(in: CGRect(x: 0, y: 0, width: 160, height: 120))
+        }
+        if let data = thumb.pngData() {
+            print("APP_TEST_IMAGE_BASE64:" + data.base64EncodedString())
         }
         XCTAssertTrue(varied, "App upper controls appear blank/white in captured root screen")
         window.isHidden = true
