@@ -130,6 +130,42 @@ final class CanvasCoreTests: XCTestCase {
         window.isHidden = true
     }
 
+    func testStashShrinksOnCornerApproachWithoutFalseFarAwayHit() {
+        let target = CGRect(x: 780, y: 105, width: 150, height: 38)
+        let far = CGRect(x: 100, y: 500, width: 120, height: 90)
+        let near = CGRect(x: 680, y: 162, width: 80, height: 50)
+        let touching = CGRect(x: 760, y: 140, width: 30, height: 30)
+        let overlapping = CGRect(x: 805, y: 110, width: 50, height: 25)
+        XCTAssertEqual(LassoTouchView.proximity(of: far, to: target), 0)
+        XCTAssertGreaterThan(LassoTouchView.proximity(of: near, to: target), 0)
+        XCTAssertGreaterThan(LassoTouchView.proximity(of: touching, to: target),
+                             LassoTouchView.proximity(of: near, to: target))
+        XCTAssertEqual(LassoTouchView.proximity(of: overlapping, to: target), 1)
+        XCTAssertEqual(LassoTouchView.proximity(of: overlapping, to: .null), 0)
+    }
+
+    func testBaseToolWidthIsPreservedAcrossZoomChanges() throws {
+        let store = CanvasStore()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
+        let canvas = PKCanvasView(frame: window.bounds)
+        canvas.minimumZoomScale = 0.045
+        canvas.maximumZoomScale = 10
+        canvas.contentSize = CGSize(width: 12000, height: 12000)
+        window.addSubview(canvas)
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+        store.attach(canvas)
+        store.tool = .pen
+        store.strokeWidth = 45
+        for zoom: CGFloat in [0.25, 0.5, 1, 2, 5] {
+            store.zoomTo(zoom)
+            XCTAssertEqual(store.strokeWidth, 45,
+                           "Changing zoom must never silently overwrite the user's base pen width")
+            XCTAssertEqual(store.zoom, zoom, accuracy: 0.02)
+        }
+        window.isHidden = true
+    }
+
     func testLassoMoveCommitsAtCorrectZoomThenCanBeSelectedAgain() throws {
         let store = CanvasStore()
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
