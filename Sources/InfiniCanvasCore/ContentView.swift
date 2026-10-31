@@ -902,15 +902,15 @@ struct ChatDestinationView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Palm protection") {
-                    Label("RestSafe blocks finger panning; wide two-finger spreads still zoom", systemImage: "hand.raised.fill")
+                    Label("Pencil-only drawing; move canvas with one finger, zoom with two", systemImage: "hand.raised.fill")
                     Text("The hardware Pencil double-tap and squeeze shortcuts are temporarily disabled pending compatibility testing. This is separate from the right-edge finger double-tap used to hide menus.")
                         .font(.footnote).foregroundStyle(.secondary)
-                    Text("RestSafe zoom needs fingers at least 150 pt apart and 35 pt of spreading. Navigate allows normal two-finger gestures. iPadOS system corner gestures are controlled in Settings.")
+                    Text("RestSafe allows deliberate one-finger navigation and reserves two-finger gestures for zoom. Navigate also allows two-finger panning. PencilKit rejects finger and palm ink; very large palm contacts may still move the canvas. iPadOS corner gestures remain system-controlled.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Highlighter and interface") {
                     Toggle("Fixed vertical highlighter nib", isOn: $store.fixedHighlighter)
-                    Text("Swipe up on the top grip to hide the large command bar; swipe down to reveal it. Tap the grip if swiping is inconvenient. Double-tap the wide right-edge handle with a finger for paper-only mode.")
+                    Text("Swipe up on the top grip to hide the command bar, down to restore it. Tap or double-tap the right edge for a clean paper-only view. Swipe up from the width icon to open a vertical pen-size control; keep dragging to change thickness, then swipe down or tap Done.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Canvas") {
