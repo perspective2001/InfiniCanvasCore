@@ -1023,8 +1023,8 @@ final class CanvasStore: ObservableObject {
         let subject = clip.course ?? "my current course"
         let ocr = clip.recognizedText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return """
-        LEARNING MODE — I am studying material from \\(subject).
-        The attached handwriting is the primary source. OCR is fallible: \\(ocr.isEmpty ? "Please read the image directly." : ocr)
+        LEARNING MODE — I am studying material from \(subject).
+        The attached handwriting is the primary source. OCR is fallible: \(ocr.isEmpty ? "Please read the image directly." : ocr)
         Use my connected Google Drive course readings or notes where available to ground and cross-check explanations; if they are not accessible in this chat, say so rather than guessing.
         Begin by explaining the selected concept, then quiz me with one multiple-choice question at a time, wait for my answer, and target misconceptions using retrieval practice.
         """
