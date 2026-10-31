@@ -79,6 +79,57 @@ final class CanvasCoreTests: XCTestCase {
             XCTAssertEqual(store.latestClip?.strokeCount, 3)
         }
     }
+    func testStashAndOrderedOrganizerAreNonDestructiveAndBackedUp() throws {
+        let store = CanvasStore()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
+        let canvas = PKCanvasView(frame: window.bounds)
+        canvas.minimumZoomScale = 0.045
+        canvas.maximumZoomScale = 10
+        canvas.contentSize = CGSize(width: 12000, height: 12000)
+        window.addSubview(canvas)
+        let overlay = UIView(frame: window.bounds)
+        window.addSubview(overlay)
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+        store.attach(canvas)
+        store.tool = .capture
+
+        let ink = PKDrawing(strokes: [makeStroke(.pen, x: 230, y: 250)])
+        canvas.drawing = ink
+        let polygon = [CGPoint(x: 160, y: 185), CGPoint(x: 310, y: 185),
+                       CGPoint(x: 310, y: 310), CGPoint(x: 160, y: 310)]
+        store.captureLasso(polygon, from: overlay)
+        let clip = try XCTUnwrap(store.latestClip)
+        XCTAssertEqual(clip.strokeCount, 1)
+        XCTAssertTrue(store.selectionActive)
+        let prior = canvas.drawing.dataRepresentation()
+
+        let drag = store.beginSelectionDrag()
+        XCTAssertNotNil(drag)
+        XCTAssertEqual(canvas.drawing.strokes.count, 0,
+                       "Selected strokes are detached ONLY for live drag preview")
+        XCTAssertTrue(store.stashSelectedInk())
+        XCTAssertEqual(canvas.drawing.strokes.count, 1,
+                       "Stashing must restore original ink rather than deleting it")
+        XCTAssertEqual(canvas.drawing.dataRepresentation(), prior)
+        XCTAssertEqual(store.stashedClips.map(\.id), [clip.id])
+
+        XCTAssertTrue(store.addToSpatialOrganizer(clip.id))
+        XCTAssertTrue(store.addToSpatialOrganizer(clip.id))
+        XCTAssertTrue(store.stashedClips.isEmpty)
+        XCTAssertEqual(store.spatialOrganizerClips.map(\.id), [clip.id],
+                       "Repeated drops must never duplicate the same clip")
+        XCTAssertNotNil(store.spatialOrganizerArea)
+
+        let backupURL = try XCTUnwrap(store.exportCompleteBackup())
+        let backup = try JSONDecoder().decode(
+            CompleteBackup.self, from: Data(contentsOf: backupURL))
+        XCTAssertEqual(backup.index.organizedClipIDs, [clip.id])
+        XCTAssertNotNil(backup.index.organizerAreaID)
+        XCTAssertNotNil(try PKDrawing(data: backup.drawing).strokes.first)
+        window.isHidden = true
+    }
+
     func testPencilOnlyCanvasOneFingerScrollAndNativeZoomLimit() {
         let store = CanvasStore()
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
