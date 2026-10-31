@@ -63,6 +63,9 @@ struct PencilCanvas: UIViewRepresentable {
 
 struct LassoOverlay: UIViewRepresentable {
     @ObservedObject var store: CanvasStore
+    // Updated by a SwiftUI geometry preference from the compact toolbar stash well.
+    var stashDropFrame: CGRect = .null
+
     func makeUIView(context: Context) -> LassoTouchView {
         let view = LassoTouchView()
         view.backgroundColor = .clear
@@ -73,9 +76,12 @@ struct LassoOverlay: UIViewRepresentable {
         view.onCancelMove = { [weak store] in store?.cancelSelectionDrag() }
         view.onPinch = { [weak store] recognizer, overlay in store?.handleFingerPinch(recognizer, in: overlay) }
         view.onFingerPan = { [weak store] recognizer, overlay in store?.handleLassoPan(recognizer, in: overlay) }
+        view.stashDropFrame = stashDropFrame
+        view.onStashDrop = { [weak store] in store?.stashSelectedInk() ?? false }
         return view
     }
     func updateUIView(_ view: LassoTouchView, context: Context) {
+        view.stashDropFrame = stashDropFrame
         if !store.selectionActive && view.hasOutline { view.resetOutline() }
     }
 }
@@ -85,6 +91,8 @@ final class LassoTouchView: UIView, UIGestureRecognizerDelegate {
     var onBeginMove: (() -> (UIImage, CGRect)?)?
     var onFinishMove: ((CGSize) -> Void)?
     var onCancelMove: (() -> Void)?
+    var onStashDrop: (() -> Bool)?
+    var stashDropFrame: CGRect = .null
     var onPinch: ((UIPinchGestureRecognizer, UIView) -> Void)?
     var onFingerPan: ((UIPanGestureRecognizer, UIView) -> Void)?
     var hasOutline = false
@@ -202,6 +210,32 @@ final class LassoTouchView: UIView, UIGestureRecognizerDelegate {
         guard let pencil = touches.first(where: { $0.type == .pencil }) else { return }
         let ending = pencil.location(in: self)
         if moving {
+            // The source drawing is restored before stashing: the UI does not
+            // delete the handwriting, it saves a compact reference to the clip.
+            if let window,
+               stashDropFrame != .null,
+               stashDropFrame.contains(convert(ending, to: window)),
+               onStashDrop?() == true {
+                moving = false
+                hasOutline = false
+                points = []
+                redraw()
+                let thumbnail = selectedPreview
+                selectedPreview = nil
+                let target = convert(CGPoint(x: stashDropFrame.midX,
+                                             y: stashDropFrame.midY), from: window)
+                if let thumbnail {
+                    UIView.animate(withDuration: 0.38, delay: 0,
+                                   usingSpringWithDamping: 0.77, initialSpringVelocity: 0.32,
+                                   options: [.curveEaseInOut, .allowUserInteraction]) {
+                        thumbnail.center = target
+                        thumbnail.transform = CGAffineTransform(scaleX: 0.09, y: 0.09)
+                        thumbnail.alpha = 0
+                    } completion: { _ in thumbnail.removeFromSuperview() }
+                }
+                return
+            }
+
             // Include the Pencil's final travel since the last moved event.
             let stepX = ending.x - lastPoint.x
             let stepY = ending.y - lastPoint.y
