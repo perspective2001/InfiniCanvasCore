@@ -42,6 +42,20 @@ struct GeometryRegressionTests {
                 }
             }
         }
-        print("PASS: \(checks) geometry checks across 4.5%–2400% zoom, multiple offsets and touch positions")
+        // A long moved stroke can cross a lasso even when both end points
+        // and the stroke centre lie outside the capture polygon.
+        let square = [CGPoint(x: 0, y: 0), CGPoint(x: 20, y: 0),
+                      CGPoint(x: 20, y: 20), CGPoint(x: 0, y: 20)]
+        precondition(CanvasGeometry.segmentCrossesPolygon(CGPoint(x: -10, y: 10),
+                         CGPoint(x: 30, y: 10), polygon: square),
+                     "lasso must catch long strokes crossing the interior")
+        precondition(CanvasGeometry.segmentCrossesPolygon(CGPoint(x: 0, y: 10),
+                         CGPoint(x: 30, y: 10), polygon: square),
+                     "lasso must catch a stroke touching the border")
+        precondition(!CanvasGeometry.segmentCrossesPolygon(CGPoint(x: 40, y: 10),
+                         CGPoint(x: 50, y: 10), polygon: square),
+                     "lasso must not select a nonintersecting distant stroke")
+        checks += 3
+        print("PASS: \(checks) geometry checks across 4.5%–2400% mathematical zoom, multiple offsets and touch positions")
     }
 }
