@@ -29,7 +29,9 @@ struct PencilCanvas: UIViewRepresentable {
         deliberatePinch.cancelsTouchesInView = false
         view.addGestureRecognizer(deliberatePinch)
         // System pencil gesture; switch quickly between last writing tool and eraser.
-        let pencil = UIPencilInteraction(delegate: context.coordinator)
+        // Use the broadly available initializer; init(delegate:) requires iOS 17.5.
+        let pencil = UIPencilInteraction()
+        pencil.delegate = context.coordinator
         view.addInteraction(pencil)
         store.attach(view)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak store] in
