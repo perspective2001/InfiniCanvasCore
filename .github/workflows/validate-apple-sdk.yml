@@ -53,6 +53,11 @@ jobs:
           cd /tmp/infini-consumer
           swift package resolve
           swift package show-dependencies
+      - name: Validate canvas geometry at all supported zoom levels
+        run: |
+          set -euo pipefail
+          swiftc Sources/InfiniCanvasCore/CanvasGeometry.swift Tests/GeometrySmoke/GeometrySmoke.swift -o /tmp/infini-geometry-smoke
+          /tmp/infini-geometry-smoke
       - name: Compile for iPad simulator
         run: |
           set -o pipefail
