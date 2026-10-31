@@ -5,12 +5,14 @@ on:
     branches: [main]
     paths:
       - 'Sources/**'
+      - 'Tests/**'
       - 'Package.swift'
       - '.github/workflows/validate-apple-sdk.yml'
   pull_request:
     branches: [main]
     paths:
       - 'Sources/**'
+      - 'Tests/**'
       - 'Package.swift'
       - '.github/workflows/validate-apple-sdk.yml'
   workflow_dispatch:
