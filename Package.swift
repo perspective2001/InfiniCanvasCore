@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "InfiniCanvasCore",
-    platforms: [.iOS(.v17)],
+    platforms: [.iOS("17.5")],
     products: [
         .library(name: "InfiniCanvasCore", targets: ["InfiniCanvasCore"])
     ],
