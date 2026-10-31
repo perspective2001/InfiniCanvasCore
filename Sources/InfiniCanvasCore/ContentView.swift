@@ -26,7 +26,8 @@ struct ContentView: View {
     @State private var showLectures = false
     @State private var selectedAutoBackup: URL?
     @State private var confirmAutoBackup = false
-    @State private var showStrokeOptions = false
+    @State private var widthPanelExpanded = false
+    @State private var widthDragStart: CGFloat? = nil
     @State private var showEraserOptions = false
     @State private var showHighlighterOptions = false
     @State private var showArtStudio = false
@@ -79,6 +80,18 @@ struct ContentView: View {
         .overlay(alignment: .trailing) { sideFocusHandle }
         .overlay(alignment: .top) {
             if paperOnly { topChromeGrip }
+        }
+        .overlay(alignment: .topTrailing) {
+            if widthPanelExpanded && !paperOnly && !focusMode {
+                floatingWidthPanel
+                    .padding(.top, 105)
+                    .padding(.trailing, 20)
+                    .zIndex(99)
+                    .transition(.asymmetric(
+                        insertion: .scale(scale: 0.65, anchor: .topTrailing).combined(with: .opacity),
+                        removal: .scale(scale: 0.85, anchor: .topTrailing).combined(with: .opacity)
+                    ))
+            }
         }
         .tint(teal)
         .fullScreenCover(isPresented: $showArtStudio) { ArtStudioView() }
@@ -167,19 +180,26 @@ struct ContentView: View {
     private var sideFocusHandle: some View {
         ZStack(alignment: .trailing) {
             FingerDoubleTapTarget {
-                withAnimation(.easeInOut(duration: 0.20)) {
+                withAnimation(.spring(response: 0.30, dampingFraction: 0.87)) {
                     paperOnly.toggle()
+                    widthPanelExpanded = false
                 }
             }
             Capsule()
-                .fill(paperOnly ? teal.opacity(0.75) : teal.opacity(0.48))
-                .frame(width: 7, height: 54)
-                .padding(.trailing, 8)
+                .fill(paperOnly ? teal.opacity(0.92) : teal.opacity(0.62))
+                .frame(width: 9, height: 68)
+                .overlay(alignment: .center) {
+                    Image(systemName: paperOnly ? "chevron.left" : "chevron.right")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+                .padding(.trailing, 10)
                 .allowsHitTesting(false)
         }
-        .frame(width: 54, height: 116)
-        .accessibilityLabel(paperOnly ? "Double tap right edge to restore controls" : "Double tap right edge to hide controls")
-        .accessibilityHint("Use two quick finger taps on the vertical bar at the right")
+        .frame(width: 76, height: 176)
+        .contentShape(Rectangle())
+        .accessibilityLabel(paperOnly ? "Restore all controls" : "Hide all controls and show only paper")
+        .accessibilityHint("Tap or double-tap the right-edge handle to switch paper-only mode")
     }
 
     // Always-present top handle. Swipe UP to tuck the header away, DOWN to reveal.
@@ -312,6 +332,8 @@ struct ContentView: View {
                 Button("Writing · 100%", systemImage: "pencil") { store.zoomToWriting() }
                 Button("Zoom out further", systemImage: "minus.magnifyingglass") { store.zoomBy(0.4) }
                 Button("Zoom in", systemImage: "plus.magnifyingglass") { store.zoomBy(2.5) }
+                Button("Exact 2400% zoom", systemImage: "plus.viewfinder") { store.zoomTo(24) }
+                Button("Exact 3200% zoom", systemImage: "plus.circle") { store.zoomTo(32) }
             } label: {
                 Image(systemName: "square.dashed.inset.filled")
                     .frame(width: 36, height: 40)
@@ -439,7 +461,7 @@ struct ContentView: View {
                             // First press always restores the ordinary Apple pen, not
                             // the persisted Fountain profile. Press again for styles.
                             if store.tool == .pen && store.penProfile == .fluid {
-                                showStrokeOptions = true
+                                widthPanelExpanded = true
                             } else {
                                 store.tool = .pen
                                 store.penProfile = .fluid
@@ -543,48 +565,172 @@ struct ContentView: View {
                         Label("Brushes", systemImage: "paintbrush.pointed.fill")
                     }.buttonStyle(.bordered)
                 }
-                Button { showStrokeOptions = true } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "lineweight")
-                        Text(String(format: "%.1f", Double(store.strokeWidth)))
-                            .font(.caption.monospacedDigit())
-                    }
-                    .frame(minWidth: 68, minHeight: 42)
-                }
-                .buttonStyle(.bordered)
-                .accessibilityLabel("Pen thickness")
-                .popover(isPresented: $showStrokeOptions, arrowEdge: .bottom) {
-                    VStack(alignment: .leading, spacing: 18) {
-                        Text(store.mode == .art ? "Brush size" : "Pen thickness").font(.headline)
-                        if store.tool == .pen {
-                            Picker("Pen profile", selection: $store.penProfile) {
-                                ForEach(PenProfile.allCases) { profile in Text(profile.rawValue).tag(profile) }
-                            }
-                            .pickerStyle(.segmented)
-                        }
-                        Slider(value: Binding(
-                            get: { Double(store.strokeWidth) },
-                            set: { store.strokeWidth = CGFloat($0) }), in: 0.4...(store.mode == .art ? 80 : 18))
-                        HStack {
-                            ForEach([1.3, 2.5, 5.0, 9.0], id: \.self) { width in
-                                Button { store.strokeWidth = CGFloat(width) } label: {
-                                    Circle().fill(teal).frame(width: max(4, width * 1.6), height: max(4, width * 1.6))
-                                        .frame(width: 38, height: 38)
-                                }
-                                .buttonStyle(.bordered)
-                                .accessibilityLabel("Set thickness to \(width)")
-                            }
-                        }
-                    }
-                    .padding(20)
-                    .frame(width: 280)
-                    .presentationCompactAdaptation(.popover)
-                }
+                penWidthTrigger
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 5)
         }
         .background(Color(red: 0.964, green: 0.967, blue: 0.962))
+    }
+
+    // Swipe upward from the compact width icon to reveal an expanding, directly
+    // draggable vertical width slider. The same gesture can immediately change
+    // pen width without lifting the Pencil. A tap is also supported.
+    private var penWidthTrigger: some View {
+        Button {
+            withAnimation(.spring(response: 0.34, dampingFraction: 0.79)) {
+                widthPanelExpanded.toggle()
+            }
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "lineweight")
+                    .font(.system(size: 18, weight: .medium))
+                Text(String(format: "%.1f", Double(store.strokeWidth)))
+                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .frame(minWidth: 35, alignment: .trailing)
+            }
+            .frame(width: 84, height: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.bordered)
+        .accessibilityLabel("Pen size: \(String(format: "%.1f", Double(store.strokeWidth)))")
+        .accessibilityHint("Swipe up to expand size slider, keep dragging to resize, or tap")
+        .highPriorityGesture(
+            DragGesture(minimumDistance: 7)
+                .onChanged { value in
+                    if value.translation.height < -12 {
+                        if widthDragStart == nil {
+                            widthDragStart = store.strokeWidth
+                            withAnimation(.spring(response: 0.34, dampingFraction: 0.77)) {
+                                widthPanelExpanded = true
+                            }
+                        }
+                        let baseline = widthDragStart ?? store.strokeWidth
+                        let maxSize: CGFloat = store.mode == .art ? 80 : 18
+                        store.strokeWidth = min(maxSize, max(0.4,
+                            baseline + (-value.translation.height - 12) * 0.075))
+                    }
+                }
+                .onEnded { value in
+                    widthDragStart = nil
+                    if value.translation.height > 48 {
+                        withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
+                            widthPanelExpanded = false
+                        }
+                    }
+                }
+        )
+    }
+
+    private var floatingWidthPanel: some View {
+        VStack(spacing: 11) {
+            Capsule()
+                .fill(teal.opacity(0.55))
+                .frame(width: 43, height: 5)
+                .frame(height: 23)
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 10).onEnded { value in
+                    if value.translation.height > 30 {
+                        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                            widthPanelExpanded = false
+                        }
+                    }
+                })
+                .accessibilityLabel("Swipe down to close pen size")
+            HStack(spacing: 8) {
+                Image(systemName: "lineweight").foregroundStyle(teal)
+                Text(String(format: "%.1f pt", Double(store.strokeWidth)))
+                    .font(.system(size: 16, weight: .semibold, design: .rounded).monospacedDigit())
+            }
+            .frame(maxWidth: .infinity)
+            if store.tool == .pen {
+                Menu {
+                    ForEach(PenProfile.allCases) { profile in
+                        Button(profile.rawValue) { store.penProfile = profile }
+                    }
+                } label: {
+                    HStack {
+                        Text(store.penProfile.rawValue)
+                        Image(systemName: "chevron.down").font(.caption)
+                    }
+                    .font(.caption.weight(.medium))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 7)
+                    .background(teal.opacity(0.08), in: Capsule())
+                }
+            }
+            GeometryReader { geometry in
+                let barHeight = geometry.size.height
+                let maxSize: CGFloat = store.mode == .art ? 80 : 18
+                let proportion = min(1, max(0, (store.strokeWidth - 0.4) / (maxSize - 0.4)))
+                ZStack(alignment: .bottom) {
+                    Capsule()
+                        .fill(Color.primary.opacity(0.08))
+                        .frame(width: 21)
+                    Capsule()
+                        .fill(LinearGradient(
+                            colors: [teal, Color.cyan.opacity(0.95), Color.blue.opacity(0.77)],
+                            startPoint: .bottom, endPoint: .top))
+                        .frame(width: 21, height: max(8, barHeight * proportion))
+                    Circle()
+                        .fill(.white)
+                        .frame(width: 34, height: 34)
+                        .overlay(Circle().stroke(teal, lineWidth: 3))
+                        .shadow(color: teal.opacity(0.25), radius: 5)
+                        .offset(y: -max(0, barHeight - 34) * proportion)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 0).onChanged { value in
+                    let ratio = 1 - min(1, max(0, value.location.y / max(1, barHeight)))
+                    store.strokeWidth = 0.4 + ratio * (maxSize - 0.4)
+                })
+            }
+            .frame(height: 194)
+            .accessibilityLabel("Vertical pen width slider")
+            HStack(spacing: 5) {
+                ForEach([1.3, 2.5, 5.0, 9.0], id: \.self) { width in
+                    Button { store.strokeWidth = CGFloat(width) } label: {
+                        Circle()
+                            .fill(teal)
+                            .frame(width: CGFloat(max(5, min(21, width * 1.65))),
+                                   height: CGFloat(max(5, min(21, width * 1.65))))
+                            .frame(width: 37, height: 37)
+                            .background(Color.primary.opacity(0.055), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Width preset \(width)")
+                }
+            }
+            .frame(maxWidth: .infinity)
+            Button {
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
+                    widthPanelExpanded = false
+                }
+            } label: {
+                Label("Done", systemImage: "chevron.down")
+                    .font(.caption.weight(.semibold))
+                    .frame(maxWidth: .infinity, minHeight: 34)
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding(14)
+        .frame(width: 205)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 29, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 29, style: .continuous)
+                .stroke(
+                    LinearGradient(colors: [
+                        Color.cyan.opacity(0.9),
+                        Color.blue.opacity(0.7),
+                        Color.purple.opacity(0.45),
+                        Color.cyan.opacity(0.7)
+                    ], startPoint: .topLeading, endPoint: .bottomTrailing),
+                    lineWidth: 2.2
+                )
+                .allowsHitTesting(false)
+        }
+        .shadow(color: .cyan.opacity(0.22), radius: 19, y: 6)
     }
 
     private var textNoteCards: some View {
