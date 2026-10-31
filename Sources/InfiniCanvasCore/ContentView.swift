@@ -14,6 +14,9 @@ struct ContentView: View {
     @State private var newAreaName = ""
     @State private var focusMode = false
     @State private var shareURL: URL?
+    @State private var shareItems: [Any] = []
+    @State private var stashDropFrame: CGRect = .null
+    @Namespace private var widthMorph
     @State private var showShare = false
     @State private var importing = false
     @State private var selectedImportURL: URL?
@@ -50,9 +53,10 @@ struct ContentView: View {
             PencilCanvas(store: store)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            if store.tool == .capture { LassoOverlay(store: store) }
+            if store.tool == .capture { LassoOverlay(store: store, stashDropFrame: stashDropFrame) }
             if store.tool == .marker && store.fixedHighlighter { FixedHighlighterOverlay(store: store) }
             if let focus = store.focusedArea { isolatedAreaShade(focus).allowsHitTesting(false) }
+            spatialOrganizerOverlay
             if store.tool != .capture && !focusMode && store.zoom > 0.5 { textNoteCards
                 .allowsHitTesting(!store.restSafe)
             }
@@ -71,6 +75,7 @@ struct ContentView: View {
                         if showTopBar {
                             topChromeGrip
                             header
+                            if !store.stashedClips.isEmpty { clipActionShelf }
                         } else {
                             // Compact mode puts the actual tools almost flush to the top.
                             // The thin transparent grip still accepts a deliberate down swipe.
@@ -145,7 +150,7 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $showShare) {
-            if let url = shareURL { SystemShareSheet(items: [url]) }
+            if !shareItems.isEmpty { SystemShareSheet(items: shareItems) }
         }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
             if case .success(let url) = result { selectedImportURL = url; confirmRestore = true }
@@ -414,6 +419,7 @@ struct ContentView: View {
             Button("Minimal writing controls", systemImage: "arrow.up.left.and.arrow.down.right") { focusMode = true }
             Button("Hide top command bar", systemImage: "chevron.up") { showTopBar = false }
             Button("Jump to most recent handwriting", systemImage: "location.magnifyingglass") { store.goToLastInk() }
+            Button("Go to spatial organizer", systemImage: "square.grid.2x2") { store.openSpatialOrganizer() }
             Button("Hide all menus", systemImage: "rectangle.dashed") { paperOnly = true }
             if !store.organizedUndo.isEmpty {
                 Button("Undo last organization", systemImage: "arrow.uturn.backward") { store.undoOrganization() }
@@ -593,11 +599,141 @@ struct ContentView: View {
                     }.buttonStyle(.bordered)
                 }
                 penWidthTrigger
+                if store.tool == .capture { stashWell }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 5)
         }
         .modifier(CanvasGlassSurface(cornerRadius: 20))
+    }
+
+    // Lassoed original ink stays on canvas. Only the miniature, persistent clip
+    // is stashed; PencilKit restores any detached drag preview on drop.
+    private var stashWell: some View {
+        HStack(spacing: 4) {
+            if let clip = store.stashedClips.last, let preview = store.clipImage(clip) {
+                Image(uiImage: preview)
+                    .resizable().scaledToFit().frame(width: 38, height: 32)
+                    .clipShape(RoundedRectangle(cornerRadius: 7))
+                    .draggable(clip.id.uuidString) {
+                        Image(uiImage: preview)
+                            .resizable().scaledToFit()
+                            .frame(width: 66, height: 48)
+                            .padding(5)
+                            .modifier(CanvasGlassSurface(cornerRadius: 12))
+                    }
+                    .accessibilityLabel("Drag stashed clip to Learn, ChatGPT or Organize")
+                if store.stashedClipIDs.count > 1 {
+                    Text("\(store.stashedClipIDs.count)")
+                        .font(.caption2.monospacedDigit())
+                }
+                Button { store.removeFromStash(clip.id) } label: {
+                    Image(systemName: "xmark").font(.system(size: 10, weight: .bold))
+                }.buttonStyle(.plain)
+                 .accessibilityLabel("Dismiss temporary thumbnail without deleting ink")
+            } else {
+                Image(systemName: "square.on.square.dashed").font(.system(size: 13))
+                Text("Stash").font(.caption2.weight(.semibold))
+            }
+        }
+        .frame(minWidth: 71, minHeight: 44)
+        .padding(.horizontal, 6)
+        .foregroundStyle(teal)
+        .background(teal.opacity(0.12), in: Capsule())
+        .modifier(CanvasGlassSurface(cornerRadius: 20))
+        .background {
+            GeometryReader { geometry in
+                Color.clear.preference(key: StashDropFramePreferenceKey.self,
+                                       value: geometry.frame(in: .global))
+            }
+        }
+        .onPreferenceChange(StashDropFramePreferenceKey.self) { stashDropFrame = $0 }
+        .animation(.spring(response: 0.36, dampingFraction: 0.76), value: store.stashedClipIDs.count)
+    }
+
+    // Drag a tiny thumbnail from the stash well up to one of these actions.
+    private var clipActionShelf: some View {
+        HStack(spacing: 10) {
+            Text("Drop clip")
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.secondary)
+            ForEach(ClipDropAction.allCases, id: \.self) { action in
+                Label(action.rawValue, systemImage: action.icon)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(teal)
+                    .padding(.horizontal, 9)
+                    .frame(height: 34)
+                    .modifier(CanvasGlassSurface(cornerRadius: 16))
+                    .dropDestination(for: String.self) { incoming, _ in
+                        guard let raw = incoming.first,
+                              let id = UUID(uuidString: raw) else { return false }
+                        return handleClipDrop(id, action: action)
+                    }
+                    .onTapGesture {
+                        if action == .organize { store.openSpatialOrganizer() }
+                    }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 3)
+        .transition(.move(edge: .top).combined(with: .opacity))
+    }
+
+    private func handleClipDrop(_ id: UUID, action: ClipDropAction) -> Bool {
+        guard store.stashedClipIDs.contains(id),
+              let clip = store.clips.first(where: { $0.id == id && $0.isTrashed != true })
+        else { return false }
+        switch action {
+        case .organize: return store.addToSpatialOrganizer(id)
+        case .learn: shareClip(clip, learning: true)
+        case .chat: shareClip(clip, learning: false)
+        }
+        return true
+    }
+
+    private func shareClip(_ clip: SavedClip, learning: Bool) {
+        let imageURL = store.clipURL(clip)
+        // The share sheet can offer ChatGPT if installed and compatible.
+        // It does NOT auto-post to a chat or guarantee connected Drive retrieval.
+        shareItems = learning ? [imageURL, store.studyPrompt(for: clip)] : [imageURL]
+        showShare = true
+    }
+
+    @ViewBuilder
+    private var spatialOrganizerOverlay: some View {
+        if let area = store.spatialOrganizerArea, !store.spatialOrganizerClips.isEmpty,
+           store.tool != .capture {
+            GeometryReader { geometry in
+                let p = store.screenPoint(for: area)
+                if p.x > -280 && p.x < geometry.size.width + 280 &&
+                   p.y > -240 && p.y < geometry.size.height + 240 {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("Organized study clips", systemImage: "square.grid.2x2")
+                            .font(.caption.weight(.semibold))
+                        ScrollView(.horizontal) {
+                            HStack(spacing: 6) {
+                                ForEach(Array(store.spatialOrganizerClips.enumerated()), id: \.element.id) { index, clip in
+                                    Button { store.goToClip(clip) } label: {
+                                        VStack(spacing: 2) {
+                                            if let image = store.clipImage(clip) {
+                                                Image(uiImage: image).resizable().scaledToFit()
+                                                    .frame(width: 55, height: 40)
+                                            }
+                                            Text("\(index + 1)").font(.caption2.monospacedDigit())
+                                        }
+                                        .frame(width: 70, height: 62)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
+                    .padding(11).frame(width: 260)
+                    .modifier(CanvasGlassSurface(cornerRadius: 20))
+                    .position(p)
+                }
+            }
+        }
     }
 
     private var activeSize: CGFloat {
@@ -887,16 +1023,17 @@ struct ContentView: View {
 
     private var lassoActions: some View {
         VStack(spacing: 8) {
-            Text("Circle with Pencil → clip automatically saved. Palm and finger touches ignored.")
+            Text("Circle with Pencil, drag into Stash above, then drag its small thumbnail to Learn, ChatGPT or Organize.")
                 .font(.caption).foregroundStyle(.secondary)
             if store.selectionActive, let clip = store.latestClip {
                 HStack(spacing: 8) {
                     Label("Captured", systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green).font(.caption.weight(.semibold))
                     Button("Copy") { store.copyClip(clip) }.buttonStyle(.bordered)
-                    Button("Share") { shareURL = store.clipURL(clip); showShare = true }.buttonStyle(.bordered)
-                    Button("Open GPT") { openSpecificChat(clip) }.buttonStyle(.borderedProminent)
-                    Button("Study prompt") { store.copyStudyPrompt(clip) }.buttonStyle(.bordered)
+                    Button("Share") { shareItems = [store.clipURL(clip)]; showShare = true }.buttonStyle(.bordered)
+                    Button("Stash") { _ = store.stashSelectedInk() }.buttonStyle(.borderedProminent)
+                    Button("Open GPT") { shareClip(clip, learning: false) }.buttonStyle(.bordered)
+                    Button("Learn") { shareClip(clip, learning: true) }.buttonStyle(.bordered)
                     Button("Make area") { store.makeAreaFromSelection() }.buttonStyle(.bordered)
                     Menu {
                         if store.activeAreas.isEmpty { Text("Mark an area first") }
@@ -932,7 +1069,7 @@ struct ContentView: View {
     }
 
     private func shareBackup() {
-        if let url = store.exportCompleteBackup() { shareURL = url; showShare = true }
+        if let url = store.exportCompleteBackup() { shareItems = [url]; showShare = true }
     }
     private func openSpecificChat(_ clip: SavedClip) {
         store.copyClip(clip)
@@ -1048,5 +1185,24 @@ private struct CanvasGlassSurface: ViewModifier {
             content.background(.ultraThinMaterial,
                                in: RoundedRectangle(cornerRadius: cornerRadius))
         }
+    }
+}
+
+private enum ClipDropAction: String, CaseIterable {
+    case learn = "Learn", chat = "ChatGPT", organize = "Organize"
+    var icon: String {
+        switch self {
+        case .learn: return "graduationcap"
+        case .chat: return "bubble.left.and.bubble.right"
+        case .organize: return "square.grid.2x2"
+        }
+    }
+}
+
+private struct StashDropFramePreferenceKey: PreferenceKey {
+    static var defaultValue: CGRect = .null
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let frame = nextValue()
+        if frame != .null { value = frame }
     }
 }
