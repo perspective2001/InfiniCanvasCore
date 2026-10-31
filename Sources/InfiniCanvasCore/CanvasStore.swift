@@ -125,6 +125,8 @@ struct CompleteBackup: Codable {
     var clipImages: [String: Data]
     var clipDrawings: [String: Data]
     var audioFiles: [String: Data]? = nil
+    // Optional for compatibility with older exports that predate Art Studio backups.
+    var artworkData: Data? = nil
 }
 
 @MainActor
@@ -544,8 +546,10 @@ final class CanvasStore: ObservableObject {
             // Atomic write first; the recovery file is always from an earlier known good save.
             if FileManager.default.fileExists(atPath: drawingFile.path) {
                 createPeriodicRevisionIfNeeded()
-                try? FileManager.default.removeItem(at: recoveryFile)
-                try? FileManager.default.copyItem(at: drawingFile, to: recoveryFile)
+                // Atomically replace recovery from a known-good drawing. Never
+                // erase the prior recovery copy before the new copy is secured.
+                let previous = try Data(contentsOf: drawingFile)
+                try previous.write(to: recoveryFile, options: .atomic)
             }
             try data.write(to: drawingFile, options: [.atomic, .completeFileProtectionUnlessOpen])
             try persistIndex()
@@ -620,9 +624,12 @@ final class CanvasStore: ObservableObject {
                 audio[lecture.audioFile] = data
             }
         }
+        let artFile = directory.appendingPathComponent("Artwork", isDirectory: true)
+            .appendingPathComponent("artwork.json")
+        let artwork = try? Data(contentsOf: artFile)
         return CompleteBackup(format: "infini-canvas-native-v5", exportedAt: .now,
             drawing: drawingData, index: currentIndex(), clipImages: pngs,
-            clipDrawings: vectors, audioFiles: audio)
+            clipDrawings: vectors, audioFiles: audio, artworkData: artwork)
     }
 
     private func createAutomaticBackupIfNeeded(drawingData: Data) {
@@ -1120,6 +1127,10 @@ final class CanvasStore: ObservableObject {
             guard ["infini-canvas-native-v4", "infini-canvas-native-v5"].contains(backup.format)
                 else { status = "Unknown backup format"; return false }
             let restored = try PKDrawing(data: backup.drawing)
+            // Check optional art-document bytes before changing any current files.
+            if let art = backup.artworkData {
+                _ = try JSONDecoder().decode(ArtworkDocument.self, from: art)
+            }
             // Preserve the current drawing as a rollback file before applying an import.
             if let current = canvas?.drawing.dataRepresentation() {
                 try current.write(to: recoveryFile, options: .atomic)
@@ -1141,6 +1152,12 @@ final class CanvasStore: ObservableObject {
             loading = true; canvas?.drawing = restored; loading = false
             try backup.drawing.write(to: drawingFile, options: .atomic)
             try persistIndex()
+            if let art = backup.artworkData {
+                let artFolder = directory.appendingPathComponent("Artwork", isDirectory: true)
+                try FileManager.default.createDirectory(at: artFolder, withIntermediateDirectories: true)
+                let artFile = artFolder.appendingPathComponent("artwork.json")
+                try art.write(to: artFile, options: .atomic)
+            }
             isSaved = true; status = "Complete backup restored"
             return true
         } catch { status = "Backup import failed: \(error.localizedDescription)"; return false }
