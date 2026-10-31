@@ -17,7 +17,7 @@ struct PencilCanvas: UIViewRepresentable {
         // Apple documents one-finger scrolling in pencil-only mode.
         view.isScrollEnabled = true
         view.minimumZoomScale = 0.045
-        view.maximumZoomScale = 32
+        view.maximumZoomScale = 10
         view.bouncesZoom = false
         view.contentSize = CGSize(width: 100000, height: 100000)
         view.alwaysBounceVertical = false
