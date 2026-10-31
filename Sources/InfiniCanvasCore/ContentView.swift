@@ -772,6 +772,9 @@ struct ContentView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.bordered)
+        .matchedGeometryEffect(id: "penSizePill", in: widthMorph,
+                               properties: .frame, anchor: .topTrailing,
+                               isSource: !widthPanelExpanded)
         .accessibilityLabel("Tool width \(String(format: "%.1f", Double(activeSize))) points, \(String(format: "%.1f", Double(visibleSize))) at current zoom")
         .accessibilityHint("Swipe up to expand size slider, keep dragging to resize, or tap")
         .highPriorityGesture(
@@ -800,130 +803,111 @@ struct ContentView: View {
         )
     }
 
+    // A narrow drop-shaped extension of the existing 84-point width pill,
+    // NOT a sidebar. It expands upward and remains the same teal-green identity.
     private var floatingWidthPanel: some View {
-        VStack(spacing: 11) {
+        VStack(spacing: 7) {
             Capsule()
-                .fill(teal.opacity(0.55))
-                .frame(width: 43, height: 5)
-                .frame(height: 23)
+                .fill(teal.opacity(0.52))
+                .frame(width: 31, height: 4)
+                .frame(height: 17)
                 .contentShape(Rectangle())
-                .gesture(DragGesture(minimumDistance: 10).onEnded { value in
-                    if value.translation.height > 30 {
-                        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                .gesture(DragGesture(minimumDistance: 8).onEnded { value in
+                    if value.translation.height > 24 {
+                        withAnimation(.spring(response: 0.31, dampingFraction: 0.76)) {
                             widthPanelExpanded = false
                         }
                     }
                 })
-                .accessibilityLabel("Swipe down to close pen size")
-            HStack(spacing: 8) {
-                Image(systemName: "lineweight").foregroundStyle(teal)
-                Text(String(format: "%.1f pt", Double(activeSize)))
-                    .font(.system(size: 16, weight: .semibold, design: .rounded).monospacedDigit())
+                .accessibilityLabel("Swipe down to collapse width")
+            HStack(spacing: 4) {
+                Image(systemName: store.tool == .eraser ? "eraser" : "lineweight")
+                Text(String(format: "%.1f", Double(activeSize)))
+                    .monospacedDigit()
             }
-            .frame(maxWidth: .infinity)
-            VStack(spacing: 2) {
-                Text(String(format: "At %.0f%% zoom · %.1f pt on screen",
-                            Double(store.zoom * 100), Double(visibleSize)))
-                    .font(.caption.monospacedDigit().weight(.medium))
-                Text("Actual stroke shape also responds to Pencil pressure")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                ZStack {
-                    Circle().strokeBorder(.primary.opacity(0.10), lineWidth: 1)
-                        .frame(width: 94, height: 94)
-                    if store.tool == .eraser {
-                        Circle().strokeBorder(.primary, lineWidth: 1.5)
-                            .frame(width: min(94, max(3, visibleSize)),
-                                   height: min(94, max(3, visibleSize)))
-                    } else {
-                        Circle().fill(Color(uiColor: store.inkColor))
-                            .frame(width: min(94, max(1, visibleSize)),
-                                   height: min(94, max(1, visibleSize)))
-                    }
-                }
-                .frame(height: 100)
-                if visibleSize > 94 {
-                    Text("Preview capped to fit; value above is exact")
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
+            .font(.system(size: 13, weight: .semibold, design: .rounded))
+            .foregroundStyle(teal)
+            Text(String(format: "%.0f%% · %.1f pt",
+                        Double(store.zoom * 100), Double(visibleSize)))
+                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .minimumScaleFactor(0.7)
+                .lineLimit(1)
+                .accessibilityLabel("Width at the current zoom, in points")
+            ZStack {
+                Circle().strokeBorder(teal.opacity(0.16), lineWidth: 1)
+                    .frame(width: 57, height: 57)
+                if store.tool == .eraser {
+                    Circle().strokeBorder(teal, lineWidth: 1.8)
+                        .frame(width: min(57, max(3, visibleSize)),
+                               height: min(57, max(3, visibleSize)))
+                } else {
+                    Circle().fill(Color(uiColor: store.inkColor))
+                        .frame(width: min(57, max(1, visibleSize)),
+                               height: min(57, max(1, visibleSize)))
                 }
             }
-            .frame(maxWidth: .infinity)
-            .multilineTextAlignment(.center)
+            .frame(height: 60)
+            .accessibilityLabel("Actual width preview at current zoom; capped at 57 points")
             if store.tool == .pen {
                 Menu {
                     ForEach(PenProfile.allCases) { profile in
                         Button(profile.rawValue) { store.penProfile = profile }
                     }
                 } label: {
-                    HStack {
-                        Text(store.penProfile.rawValue)
-                        Image(systemName: "chevron.down").font(.caption)
-                    }
-                    .font(.caption.weight(.medium))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 7)
-                    .background(teal.opacity(0.08), in: Capsule())
+                    Text(store.penProfile.rawValue)
+                        .font(.system(size: 10, weight: .medium))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 5)
+                        .background(teal.opacity(0.09), in: Capsule())
                 }
+                .foregroundStyle(teal)
             }
             GeometryReader { geometry in
-                let barHeight = geometry.size.height
+                let height = geometry.size.height
                 let range = activeSizeLimits
-                let proportion = min(1, max(0, (activeSize - range.lowerBound) /
-                                                 (range.upperBound - range.lowerBound)))
+                let percent = min(1, max(0, (activeSize - range.lowerBound) /
+                                             (range.upperBound - range.lowerBound)))
                 ZStack(alignment: .bottom) {
-                    Capsule()
-                        .fill(Color.primary.opacity(0.08))
-                        .frame(width: 21)
-                    Capsule()
-                        .fill(LinearGradient(
-                            colors: [teal, Color.cyan.opacity(0.95), Color.blue.opacity(0.77)],
-                            startPoint: .bottom, endPoint: .top))
-                        .frame(width: 21, height: max(8, barHeight * proportion))
-                    Capsule()
-                        .fill(Color.white.opacity(0.9))
-                        .frame(width: 17, height: 6)
-                        .offset(y: -max(0, barHeight - 7) * proportion)
+                    Capsule().fill(teal.opacity(0.12)).frame(width: 19)
+                    Capsule().fill(LinearGradient(
+                        colors: [teal, Color.cyan.opacity(0.75)],
+                        startPoint: .bottom, endPoint: .top))
+                        .frame(width: 19, height: max(4, height * percent))
+                    Capsule().fill(.white.opacity(0.9))
+                        .frame(width: 15, height: 5)
+                        .offset(y: -max(0, height - 6) * percent)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
                 .gesture(DragGesture(minimumDistance: 0).onChanged { value in
-                    let ratio = 1 - min(1, max(0, value.location.y / max(1, barHeight)))
-                    let range = activeSizeLimits
+                    let ratio = 1 - min(1, max(0, value.location.y / max(1, height)))
                     applySize(range.lowerBound + ratio * (range.upperBound - range.lowerBound))
                 })
             }
-            .frame(height: 194)
-            .accessibilityLabel("Vertical \(store.tool == .eraser ? "eraser" : "pen") size slider")
-            HStack(spacing: 5) {
-                ForEach([1.3, 2.5, 5.0, 9.0], id: \.self) { width in
-                    Button { applySize(CGFloat(width)) } label: {
-                        Circle()
-                            .fill(teal)
-                            .frame(width: CGFloat(max(5, min(21, width * 1.65))),
-                                   height: CGFloat(max(5, min(21, width * 1.65))))
-                            .frame(width: 37, height: 37)
-                            .background(Color.primary.opacity(0.055), in: Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Width preset \(width)")
-                }
-            }
-            .frame(maxWidth: .infinity)
+            .frame(height: 150)
+            .accessibilityLabel("Continuous vertical brush or eraser width slider")
             Button {
-                withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.79)) {
                     widthPanelExpanded = false
                 }
             } label: {
-                Label("Done", systemImage: "chevron.down")
+                Image(systemName: "chevron.down")
                     .font(.caption.weight(.semibold))
-                    .frame(maxWidth: .infinity, minHeight: 34)
+                    .frame(width: 35, height: 23)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.plain)
+            .foregroundStyle(teal)
         }
-        .padding(14)
-        .frame(width: 205)
-        .modifier(CanvasGlassSurface(cornerRadius: 29))
-        .shadow(color: .black.opacity(0.10), radius: 16, y: 6)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 8)
+        .frame(width: 111)
+        .modifier(CanvasGlassSurface(cornerRadius: 30))
+        .matchedGeometryEffect(id: "penSizePill", in: widthMorph,
+                               properties: .frame, anchor: .topTrailing,
+                               isSource: widthPanelExpanded)
+        .shadow(color: teal.opacity(0.15), radius: 12, y: 5)
     }
 
     private var textNoteCards: some View {
@@ -1180,7 +1164,8 @@ private struct CanvasGlassSurface: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
-            content.glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
+            content.glassEffect(.regular.tint(Color(red: 0.07, green: 0.40, blue: 0.43).opacity(0.22)),
+                                in: .rect(cornerRadius: cornerRadius))
         } else {
             content.background(.ultraThinMaterial,
                                in: RoundedRectangle(cornerRadius: cornerRadius))
