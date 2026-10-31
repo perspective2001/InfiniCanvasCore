@@ -643,7 +643,7 @@ struct ContentView: View {
         .background {
             GeometryReader { geometry in
                 Color.clear.preference(key: StashDropFramePreferenceKey.self,
-                                       value: geometry.frame(in: .global))
+                                       value: geometry.frame(in: .named("infini-canvas-root")))
             }
         }
         .onPreferenceChange(StashDropFramePreferenceKey.self) { stashDropFrame = $0 }
