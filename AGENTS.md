@@ -37,6 +37,7 @@ Read this before editing or releasing. These rules are persistent repository ins
 - `IntegrationHost/InfiniCanvasPermanent.swiftpm/`: *CI-only* twin of existing host; do not ask user to reinstall it.
 - `docs/KNOWN_BASELINE.md`: preserved source hashes, known working and broken behaviours.
 - `docs/RELEASE_AND_ROLLBACK.md`: build, physical acceptance, safety and tag policy.
+- `docs/ENGINEERING_PLAYBOOK.md`: shared evidence-first engineering loop, code-review criteria and cost-conscious verification.
 
 ## Release status
 As of 2026-10-31, 1.0.5 is the newest tag but **not user-confirmed working**. Keep it as the current source reference; no new version should be tagged until physical white-screen debugging and launch acceptance pass.
