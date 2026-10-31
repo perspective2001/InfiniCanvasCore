@@ -29,10 +29,9 @@ struct PencilCanvas: UIViewRepresentable {
         deliberatePinch.cancelsTouchesInView = false
         view.addGestureRecognizer(deliberatePinch)
         // System pencil gesture; switch quickly between last writing tool and eraser.
-        // Use the broadly available initializer; init(delegate:) requires iOS 17.5.
-        let pencil = UIPencilInteraction()
-        pencil.delegate = context.coordinator
-        view.addInteraction(pencil)
+        // PencilKit handles Pencil drawing independently of UIPencilInteraction.
+        // The optional Pencil double-tap/squeeze interaction is disabled until
+        // we can test its SDK availability in Swift Playgrounds on-device.
         store.attach(view)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak store] in
             store?.restoreViewPosition()
@@ -46,7 +45,7 @@ struct PencilCanvas: UIViewRepresentable {
         if uiView.isScrollEnabled == store.restSafe { store.applyPalmProtection() }
     }
 
-    final class Coordinator: NSObject, PKCanvasViewDelegate, UIPencilInteractionDelegate, UIGestureRecognizerDelegate {
+    final class Coordinator: NSObject, PKCanvasViewDelegate, UIGestureRecognizerDelegate {
         private weak var store: CanvasStore?
         init(store: CanvasStore) { self.store = store }
 
@@ -70,23 +69,7 @@ struct PencilCanvas: UIViewRepresentable {
         func scrollViewDidZoom(_ scrollView: UIScrollView) {
             DispatchQueue.main.async { [weak store] in store?.refreshViewport() }
         }
-        func pencilInteractionDidTap(_ interaction: UIPencilInteraction) {
-            Task { @MainActor [weak store] in
-                if store?.pencilShortcutsEnabled == true { store?.toggleEraser() }
-            }
-        }
-        @available(iOS 17.5, *)
-        func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveTap tap: UIPencilInteraction.Tap) {
-            Task { @MainActor [weak store] in
-                if store?.pencilShortcutsEnabled == true { store?.toggleEraser() }
-            }
-        }
-        @available(iOS 17.5, *)
-        func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze) {
-            Task { @MainActor [weak store] in
-                if store?.pencilShortcutsEnabled == true { store?.showSystemTools() }
-            }
-        }
+
     }
 }
 
