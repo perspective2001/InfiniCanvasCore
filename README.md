@@ -5,7 +5,7 @@ This public repository contains **source code** for a native SwiftUI/UIKit/Penci
 ## App structure
 - `InfiniCanvasCore`: native library. Exposes `InfiniCanvasRootView`.
 - Installed project: **`InfiniCanvas-Permanent-Prelinked.swiftpm`** (on the user's iPad). It is a separate app, has a stable bundle ID and uses the semver range `from: "1.0.0"`.
-- `IntegrationHost/InfiniCanvasPermanent.swiftpm/`: CI-only mirror of that app's entry point, manifest, bundle ID and entitlements, with a local package path for testing the **current PR** source. It is **not** a new project for the user.
+- `IntegrationHost/InfiniCanvasPermanent.swiftpm/`: CI-only mirror of that app's entry point, manifest, bundle ID and entitlements, with a local package path for testing the **current PR** source. Xcode 27 compiles that exact entry-point source through a small XcodeGen iOS application; the special AppleProductTypes Playgrounds manifest is checked structurally because vanilla Xcode SwiftPM cannot import AppleProductTypes. It is **not** a new project for the user.
 
 ## Updating the existing iPad Playground
 1. In Swift Playgrounds open the same `InfiniCanvas-Permanent-Prelinked` document, never delete it to update.
@@ -16,7 +16,7 @@ GitHub pushes do not silently update the iPad binary. A package has no home-scre
 
 ## Verification and release policy
 - Read [AGENTS.md](AGENTS.md) before agent/human coding edits and [the original baseline](docs/KNOWN_BASELINE.md) before changing writing gestures.
-- Run current **Xcode 27** CI against full package **and** app-host integration. Headless Apple Pencil tests do not prove physical-device handwriting, palm rejection or menu gestures.
+- Run CI in parallel: Xcode 27 compiles native package + actual entry-point source as an iOS application; the iOS 26 compiler runs PencilKit/SwiftUI integration tests closer to the current Swift Playgrounds editor SDK. AppleProductTypes manifests cannot be directly compiled by vanilla Xcode SwiftPM. Headless Apple Pencil tests do not prove physical-device handwriting, palm rejection or menu gestures.
 - Keep changes on PR branches. Publish no package tag from a red or pending Xcode 27 CI run.
 - Read [release and rollback guide](docs/RELEASE_AND_ROLLBACK.md).
 - **1.0.5 is the latest tagged source, not a user-verified stable release**; the white-screen complaint on the actual device needs an on-iPad acceptance check.
