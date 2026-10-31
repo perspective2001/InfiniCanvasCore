@@ -323,18 +323,46 @@ final class CanvasStore: ObservableObject {
         }
     }
 
+    // MARK: - Coordinate conversions for all overlay PencilKit interactions
+    // UIScrollView.bounds.origin tracks contentOffset. Convert from the overlay
+    // to WINDOW coordinates first, and then include the offset exactly once.
+    private func viewportPoint(_ point: CGPoint, from overlay: UIView, in view: PKCanvasView) -> CGPoint? {
+        guard let window = view.window, overlay.window === window else { return nil }
+        let windowPoint = overlay.convert(point, to: window)
+        let visibleCanvas = view.convert(view.bounds, to: window)
+        return CGPoint(x: windowPoint.x - visibleCanvas.minX,
+                       y: windowPoint.y - visibleCanvas.minY)
+    }
+
+    private func drawingPoint(_ point: CGPoint, from overlay: UIView, in view: PKCanvasView) -> CGPoint? {
+        guard let viewport = viewportPoint(point, from: overlay, in: view) else { return nil }
+        let z = max(view.zoomScale, 0.0001)
+        return CGPoint(x: (view.contentOffset.x + viewport.x) / z,
+                       y: (view.contentOffset.y + viewport.y) / z)
+    }
+
+    private func zoomPreservingAnchor(_ requestedScale: CGFloat, at viewport: CGPoint, in view: PKCanvasView) {
+        let originalZoom = max(view.zoomScale, 0.0001)
+        let anchor = CGPoint(x: (view.contentOffset.x + viewport.x) / originalZoom,
+                             y: (view.contentOffset.y + viewport.y) / originalZoom)
+        let newScale = min(view.maximumZoomScale, max(view.minimumZoomScale, requestedScale))
+        guard abs(newScale - originalZoom) > 0.000001 else { return }
+        view.setZoomScale(newScale, animated: false)
+        let actual = view.zoomScale
+        view.setContentOffset(CGPoint(x: anchor.x * actual - viewport.x,
+                                      y: anchor.y * actual - viewport.y), animated: false)
+        refreshViewport()
+    }
+
     // Called only when a fixed-highlighter Pencil stroke has FINISHED. Never save partial frames.
     // PKStrokePoint's azimuth and point dimensions are fixed; the backing PKDrawing stays editable.
     func commitFixedMarker(_ screenPoints: [CGPoint], in overlay: UIView) {
         guard let view = canvas, screenPoints.count >= 1 else { return }
-        let scale = max(view.zoomScale, 0.0001)
         let height = max(6, markerHeight)
         let width = max(2, markerWidth)
         var samples: [PKStrokePoint] = []
         for (index, screen) in screenPoints.enumerated() {
-            let p = view.convert(screen, from: overlay)
-            let world = CGPoint(x: (p.x + view.contentOffset.x) / scale,
-                                y: (p.y + view.contentOffset.y) / scale)
+            guard let world = drawingPoint(screen, from: overlay, in: view) else { return }
             samples.append(PKStrokePoint(location: world,
                                          timeOffset: Double(index) / 120.0,
                                          size: CGSize(width: width, height: height),
@@ -400,13 +428,8 @@ final class CanvasStore: ObservableObject {
             let newZoom = min(view.maximumZoomScale, max(view.minimumZoomScale,
                 pinchStartingZoom * separation / max(1, pinchStartingDistance)))
             let center = recognizer.location(in: host)
-            let local = view.convert(center, from: host)
-            let anchor = CGPoint(x: (view.contentOffset.x + local.x) / max(view.zoomScale, 0.0001),
-                                 y: (view.contentOffset.y + local.y) / max(view.zoomScale, 0.0001))
-            view.setZoomScale(newZoom, animated: false)
-            view.setContentOffset(CGPoint(x: anchor.x * newZoom - local.x,
-                                          y: anchor.y * newZoom - local.y), animated: false)
-            refreshViewport()
+            guard let viewport = viewportPoint(center, from: host, in: view) else { return }
+            zoomPreservingAnchor(newZoom, at: viewport, in: view)
         }
     }
 
@@ -479,20 +502,17 @@ final class CanvasStore: ObservableObject {
     }
     func zoomToOverview() {
         guard let view = canvas else { return }
-        view.setZoomScale(0.14, animated: true)
+        zoomPreservingAnchor(0.14, at: CGPoint(x: view.bounds.width / 2, y: view.bounds.height / 2), in: view)
         status = "Overview · no notes moved · 4.5%–2400% available"
     }
     func zoomToWriting() {
-        canvas?.setZoomScale(1, animated: true)
+        guard let view = canvas else { return }
+        zoomPreservingAnchor(1, at: CGPoint(x: view.bounds.width / 2, y: view.bounds.height / 2), in: view)
     }
     func zoomBy(_ factor: CGFloat) {
         guard let view = canvas else { return }
-        let center = worldCenter()
-        let scale = min(view.maximumZoomScale, max(view.minimumZoomScale, view.zoomScale * factor))
-        view.setZoomScale(scale, animated: true)
-        view.setContentOffset(CGPoint(x: center.x * scale - view.bounds.width / 2,
-                                      y: center.y * scale - view.bounds.height / 2), animated: true)
-        refreshViewport()
+        zoomPreservingAnchor(view.zoomScale * factor, at: CGPoint(x: view.bounds.width / 2,
+                                      y: view.bounds.height / 2), in: view)
     }
 
     func drawingChanged() {
@@ -674,12 +694,10 @@ final class CanvasStore: ObservableObject {
 
     func captureLasso(_ points: [CGPoint], from overlay: UIView) {
         guard let view = canvas, points.count >= 4 else { status = "Circle an area"; return }
-        let z = max(view.zoomScale, 0.01)
-        let locations = points.map { p -> CGPoint in
-            let local = view.convert(p, from: overlay)
-            // PKCanvasView is a UIScrollView: the scroll offset must be included.
-            return CGPoint(x: (local.x + view.contentOffset.x) / z,
-                           y: (local.y + view.contentOffset.y) / z)
+        // Select every PKStroke type: pen, pencil, fountain, highlighter or custom marker.
+        let locations = points.compactMap { drawingPoint($0, from: overlay, in: view) }
+        guard locations.count == points.count else {
+            status = "Lasso couldn't read the visible drawing region"; return
         }
         let polygon = UIBezierPath()
         polygon.move(to: locations[0]); for point in locations.dropFirst() { polygon.addLine(to: point) }; polygon.close()
@@ -699,7 +717,9 @@ final class CanvasStore: ObservableObject {
             }
             if inside { indices.insert(i); selected.append(stroke) }
         }
-        guard !selected.isEmpty else { clearSelection(); status = "No ink in that circle"; return }
+        guard !selected.isEmpty else {
+            clearSelection(); status = "No pen, pencil or highlighter strokes in selection"; return
+        }
         let selectedDrawing = PKDrawing(strokes: selected)
         let bounds = selectedDrawing.bounds.insetBy(dx: -18, dy: -18)
         guard bounds.width > 1, bounds.height > 1, bounds.width < 9000, bounds.height < 9000 else {
