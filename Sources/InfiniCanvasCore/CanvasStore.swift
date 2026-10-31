@@ -536,7 +536,7 @@ final class CanvasStore: ObservableObject {
     func zoomToOverview() {
         guard let view = canvas else { return }
         zoomPreservingAnchor(0.14, at: CGPoint(x: view.bounds.width / 2, y: view.bounds.height / 2), in: view)
-        status = "Overview · 4.5%–3200% available"
+        status = "Overview · native zoom 4.5%–1000% (extended zoom requires a separate renderer)"
     }
     func zoomToWriting() {
         guard let view = canvas else { return }
