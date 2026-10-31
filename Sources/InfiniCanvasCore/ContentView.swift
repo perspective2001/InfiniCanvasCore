@@ -65,7 +65,8 @@ struct ContentView: View {
                     if focusMode {
                         focusHeader
                     } else {
-                        if showTopBar { header } else { topEdgeRevealZone }
+                        topChromeGrip
+                        if showTopBar { header }
                         toolShelf
                     }
                     Spacer(minLength: 0)
@@ -76,10 +77,7 @@ struct ContentView: View {
         }
         .overlay(alignment: .trailing) { sideFocusHandle }
         .overlay(alignment: .top) {
-            if paperOnly {
-                topEdgeRevealZone
-                    .frame(height: 25)
-            }
+            if paperOnly { topChromeGrip }
         }
         .tint(teal)
         .fullScreenCover(isPresented: $showArtStudio) { ArtStudioView() }
@@ -160,44 +158,71 @@ struct ContentView: View {
         .onDisappear { store.saveImmediately() }
     }
 
-    // Tap the small right-edge marker twice to show/hide ALL controls, as in Universal Reader.
+    // A dedicated UIKit recognizer avoids SwiftUI/PencilKit competing for the right-edge double tap.
+    // The hit area is deliberately much larger than the visible marker.
     private var sideFocusHandle: some View {
-        Capsule()
-            .fill(paperOnly ? teal.opacity(0.62) : Color.gray.opacity(0.35))
-            .frame(width: 5, height: 52)
-            .frame(width: 30, height: 85, alignment: .trailing)
-            .contentShape(Rectangle())
-            .onTapGesture(count: 2) {
-                withAnimation(.easeInOut(duration: 0.18)) { paperOnly.toggle() }
+        ZStack(alignment: .trailing) {
+            FingerDoubleTapTarget {
+                withAnimation(.easeInOut(duration: 0.20)) {
+                    paperOnly.toggle()
+                }
             }
-            .accessibilityLabel(paperOnly ? "Double tap to show menus" : "Double tap to hide all menus")
+            Capsule()
+                .fill(paperOnly ? teal.opacity(0.75) : teal.opacity(0.48))
+                .frame(width: 7, height: 54)
+                .padding(.trailing, 8)
+                .allowsHitTesting(false)
+        }
+        .frame(width: 54, height: 116)
+        .accessibilityLabel(paperOnly ? "Double tap right edge to restore controls" : "Double tap right edge to hide controls")
+        .accessibilityHint("Use two quick finger taps on the vertical bar at the right")
     }
 
-    // The entire narrow top strip accepts a deliberate downward swipe—not just a tiny button.
-    // It sits *inside* the app safe area so we don't steal iPadOS Notification Center gestures.
-    private var topEdgeRevealZone: some View {
-        GeometryReader { geometry in
-            ZStack(alignment: .top) {
-                Color.clear.contentShape(Rectangle())
-                    .gesture(DragGesture(minimumDistance: 16).onEnded { value in
-                        if value.translation.height > 32 && abs(value.translation.width) < 100 {
-                            withAnimation(.easeOut(duration: 0.22)) {
-                                paperOnly = false
-                                focusMode = false
-                                showTopBar = true
-                            }
-                        }
-                    })
-                Capsule()
-                    .fill(teal.opacity(0.45))
-                    .frame(width: 48, height: 5)
-                    .padding(.top, 4)
-                    .allowsHitTesting(false)
-            }
-            .frame(width: geometry.size.width, height: 35)
+    // Always-present top handle. Swipe UP to tuck the header away, DOWN to reveal.
+    // Tapping it also toggles the header, providing a reliable fallback if a swipe
+    // is intercepted by iPadOS or Swift Playgrounds.
+    private var topChromeGrip: some View {
+        ZStack {
+            Color.clear.contentShape(Rectangle())
+            Capsule()
+                .fill(teal.opacity(paperOnly ? 0.30 : 0.58))
+                .frame(width: 52, height: 6)
+                .allowsHitTesting(false)
         }
-        .frame(height: 35)
-        .accessibilityLabel("Swipe down at top to reveal the command bar")
+        .frame(height: 30)
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.20)) {
+                if paperOnly {
+                    paperOnly = false
+                    focusMode = false
+                    showTopBar = true
+                } else {
+                    showTopBar.toggle()
+                }
+            }
+        }
+        .highPriorityGesture(
+            DragGesture(minimumDistance: 12)
+                .onEnded { value in
+                    let dy = value.translation.height
+                    guard abs(dy) > 22 && abs(dy) > abs(value.translation.width) * 1.2 else { return }
+                    withAnimation(.easeInOut(duration: 0.20)) {
+                        if dy > 0 {
+                            paperOnly = false
+                            focusMode = false
+                            showTopBar = true
+                        } else {
+                            paperOnly = false
+                            showTopBar = false
+                        }
+                    }
+                }
+        )
+        .background(paperOnly ? Color.clear : Color(uiColor: .systemBackground).opacity(0.72))
+        .accessibilityLabel("Top controls grip")
+        .accessibilityHint("Swipe up to hide the command bar, swipe down to reveal it, or tap to toggle")
     }
 
     private func isolatedAreaShade(_ area: CanvasArea) -> some View {
@@ -311,11 +336,6 @@ struct ContentView: View {
         .padding(.horizontal, 13)
         .padding(.vertical, 7)
         .background(.regularMaterial)
-        .simultaneousGesture(DragGesture(minimumDistance: 25).onEnded { value in
-            if value.translation.height < -30 && abs(value.translation.width) < 110 {
-                withAnimation(.easeOut(duration: 0.22)) { showTopBar = false }
-            }
-        })
         .overlay(alignment: .bottom) { Rectangle().fill(.black.opacity(0.05)).frame(height: 0.5) }
     }
 
@@ -718,15 +738,14 @@ struct ChatDestinationView: View {
                 }
                 Section("Palm protection") {
                     Label("RestSafe blocks finger panning; wide two-finger spreads still zoom", systemImage: "hand.raised.fill")
-                    Toggle("Enable Pencil double-tap and squeeze shortcuts", isOn: $store.pencilShortcutsEnabled)
-                    Text("Off by default so an accidental squeeze or double-tap won't switch your pen or open the tool palette.")
+                    Text("The hardware Pencil double-tap and squeeze shortcuts are temporarily disabled pending compatibility testing. This is separate from the right-edge finger double-tap used to hide menus.")
                         .font(.footnote).foregroundStyle(.secondary)
                     Text("RestSafe zoom needs fingers at least 150 pt apart and 35 pt of spreading. Navigate allows normal two-finger gestures. iPadOS system corner gestures are controlled in Settings.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Highlighter and interface") {
                     Toggle("Fixed vertical highlighter nib", isOn: $store.fixedHighlighter)
-                    Text("Swipe up on the top command bar to hide it. Swipe down on the little top-edge grip to show it. Double-tap the right-edge handle for paper-only mode.")
+                    Text("Swipe up on the top grip to hide the large command bar; swipe down to reveal it. Tap the grip if swiping is inconvenient. Double-tap the wide right-edge handle with a finger for paper-only mode.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Canvas") {
@@ -745,6 +764,49 @@ struct ChatDestinationView: View {
             }
             .navigationTitle("Preferences")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+    }
+}
+
+// MARK: - Reliable finger-only right-edge gesture
+// A distinct UIKit touch target prevents the underlying PencilKit canvas from
+// claiming the double tap first. The visible vertical marker is drawn above it.
+private struct FingerDoubleTapTarget: UIViewRepresentable {
+    var onDoubleTap: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onDoubleTap: onDoubleTap)
+    }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView(frame: .zero)
+        view.backgroundColor = .clear
+        let recognizer = UITapGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.didDoubleTap(_:))
+        )
+        recognizer.numberOfTapsRequired = 2
+        recognizer.numberOfTouchesRequired = 1
+        recognizer.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        recognizer.cancelsTouchesInView = true
+        view.addGestureRecognizer(recognizer)
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.onDoubleTap = onDoubleTap
+    }
+
+    final class Coordinator: NSObject {
+        var onDoubleTap: () -> Void
+
+        init(onDoubleTap: @escaping () -> Void) {
+            self.onDoubleTap = onDoubleTap
+        }
+
+        @objc func didDoubleTap(_ recognizer: UITapGestureRecognizer) {
+            guard recognizer.state == .ended else { return }
+            onDoubleTap()
         }
     }
 }
