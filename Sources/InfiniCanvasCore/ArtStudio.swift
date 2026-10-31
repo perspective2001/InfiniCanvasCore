@@ -372,56 +372,15 @@ final class LayeredArtworkHost: UIView {
     var activeCanvas: PKCanvasView?
     private var syncing = false
     private var restSafe = true
-    private var pinchActivated = false
-    private var pinchInitialDistance: CGFloat = 0
-    private var pinchStartDistance: CGFloat = 1
-    private var pinchStartZoom: CGFloat = 1
     private var lastToolSignature = ""
     private let paperSize = CGSize(width: 2048, height: 2048)
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        let gesture = UIPinchGestureRecognizer(target: self, action: #selector(deliberatePinch(_:)))
-        gesture.cancelsTouchesInView = false
-        addGestureRecognizer(gesture)
+        // Use the selected PKCanvasView's own one-finger pan and native pinch.
+        // A second recognizer on the host previously competed with PencilKit.
     }
     required init?(coder: NSCoder) { fatalError("Storyboards are not used") }
-
-    @objc private func deliberatePinch(_ gesture: UIPinchGestureRecognizer) {
-        guard restSafe, let canvas = activeCanvas else { return }
-        switch gesture.state {
-        case .began:
-            pinchInitialDistance = 0
-            pinchActivated = false
-        case .changed:
-            guard gesture.numberOfTouches >= 2 else { return }
-            let first = gesture.location(ofTouch: 0, in: self)
-            let second = gesture.location(ofTouch: 1, in: self)
-            let distance = hypot(first.x - second.x, first.y - second.y)
-            if pinchInitialDistance == 0 { pinchInitialDistance = distance }
-            if !pinchActivated {
-                guard distance >= 150 && abs(distance - pinchInitialDistance) >= 35 else { return }
-                pinchStartDistance = distance
-                pinchStartZoom = canvas.zoomScale
-                pinchActivated = true
-                return
-            }
-            let scale = max(canvas.minimumZoomScale, min(canvas.maximumZoomScale,
-                            pinchStartZoom * distance / max(1, pinchStartDistance)))
-            let touch = gesture.location(in: self)
-            let before = max(0.001, canvas.zoomScale)
-            let content = CGPoint(x: (canvas.contentOffset.x + touch.x) / before,
-                                  y: (canvas.contentOffset.y + touch.y) / before)
-            canvas.setZoomScale(scale, animated: false)
-            canvas.setContentOffset(CGPoint(x: content.x * scale - touch.x,
-                                            y: content.y * scale - touch.y), animated: false)
-            syncViewport(from: canvas)
-        case .ended, .failed, .cancelled:
-            pinchInitialDistance = 0
-            pinchActivated = false
-        default: break
-        }
-    }
 
     func reconcile(art: ArtworkStore, coordinator: LayeredArtworkCanvas.Coordinator) {
         restSafe = art.restSafe
@@ -438,9 +397,9 @@ final class LayeredArtworkHost: UIView {
             canvas.isOpaque = false
             canvas.drawingPolicy = .pencilOnly
             canvas.minimumZoomScale = 0.1
-            canvas.maximumZoomScale = 24
+            canvas.maximumZoomScale = 32
             canvas.contentSize = paperSize
-            canvas.panGestureRecognizer.minimumNumberOfTouches = 2
+            canvas.panGestureRecognizer.minimumNumberOfTouches = 1
             coordinator.suppress = true
             canvas.drawing = art.drawing(for: layer)
             coordinator.suppress = false
@@ -465,7 +424,9 @@ final class LayeredArtworkHost: UIView {
             canvas.isHidden = !layer.isVisible
             let editing = layer.id == art.selectedLayerID && !layer.isLocked && layer.isVisible
             canvas.isUserInteractionEnabled = editing
-            canvas.isScrollEnabled = editing && !art.restSafe
+            canvas.isScrollEnabled = editing
+            canvas.panGestureRecognizer.minimumNumberOfTouches = 1
+            canvas.panGestureRecognizer.maximumNumberOfTouches = art.restSafe ? 1 : 2
             if editing {
                 // Don't reset an in-progress stroke during ObservableObject updates.
                 if toolChanged { canvas.tool = art.brush.pkTool(color: art.brushColor, width: art.brushSize) }
