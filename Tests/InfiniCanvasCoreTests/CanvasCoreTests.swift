@@ -290,7 +290,7 @@ final class CanvasCoreTests: XCTestCase {
         window.layoutIfNeeded()
         store.attach(canvas)
 
-        for tool: CanvasTool in [.pen, .pencil, .marker, .eraser] {
+        for tool in [CanvasTool.pen, .pencil, .marker, .eraser] {
             store.tool = tool
             if tool == .marker { store.fixedHighlighter = false }
             store.setSelectedScreenNibWidth(12)
