@@ -81,9 +81,13 @@ struct ContentView: View {
                 textNoteCards
             }
             if showAreaPins && store.zoom <= 0.55 && !focusMode && store.tool != .capture {
+                // Retain unobstructed RestSafe navigation unless the user
+                // deliberately enables category editing from the trash menu.
                 semanticOverview
+                    .allowsHitTesting(!store.restSafe || editingAreaLabels)
             } else if showAreaPins && store.zoom <= 0.85 && !focusMode && store.tool != .capture {
                 areaPins
+                    .allowsHitTesting(!store.restSafe || editingAreaLabels)
             }
             if !paperOnly {
                 VStack(spacing: 0) {
