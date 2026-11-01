@@ -68,6 +68,7 @@ struct LassoOverlay: UIViewRepresentable {
     @ObservedObject var store: CanvasStore
     // Updated by a SwiftUI geometry preference from the compact toolbar stash well.
     var stashDropFrame: CGRect = .null
+    var onStashProximity: (CGFloat) -> Void = { _ in }
 
     func makeUIView(context: Context) -> LassoTouchView {
         let view = LassoTouchView()
@@ -84,10 +85,12 @@ struct LassoOverlay: UIViewRepresentable {
         view.onFingerPan = { [weak store] recognizer, overlay in store?.handleLassoPan(recognizer, in: overlay) }
         view.stashDropFrame = stashDropFrame
         view.onStashDrop = { [weak store] in store?.stashSelectedInk() ?? false }
+        view.onStashProximity = onStashProximity
         return view
     }
     func updateUIView(_ view: LassoTouchView, context: Context) {
         view.stashDropFrame = stashDropFrame
+        view.onStashProximity = onStashProximity
         if !store.selectionActive && view.hasOutline && !view.isDragging { view.resetOutline() }
     }
 }
@@ -98,6 +101,7 @@ final class LassoTouchView: UIView, UIGestureRecognizerDelegate {
     var onFinishMove: ((CGSize) -> Void)?
     var onCancelMove: (() -> Void)?
     var onStashDrop: (() -> Bool)?
+    var onStashProximity: ((CGFloat) -> Void)?
     var stashDropFrame: CGRect = .null
     var onPinch: ((UIPinchGestureRecognizer, UIView) -> Void)?
     var onFingerPan: ((UIPanGestureRecognizer, UIView) -> Void)?
@@ -108,6 +112,8 @@ final class LassoTouchView: UIView, UIGestureRecognizerDelegate {
     private var moving = false
     var isDragging: Bool { moving }
     private var selectedPreview: UIImageView?
+    private var dragPreviewInitialFrame: CGRect = .zero
+    private var wasNearStash = false
 
     private let outline: CAShapeLayer = {
         let line = CAShapeLayer()
@@ -169,6 +175,9 @@ final class LassoTouchView: UIView, UIGestureRecognizerDelegate {
         if moving { onCancelMove?() }
         selectedPreview?.removeFromSuperview()
         selectedPreview = nil
+        dragPreviewInitialFrame = .zero
+        wasNearStash = false
+        onStashProximity?(0)
         points = []; hasOutline = false; moving = false; redraw()
     }
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -182,6 +191,7 @@ final class LassoTouchView: UIView, UIGestureRecognizerDelegate {
             preview.isUserInteractionEnabled = false
             addSubview(preview)
             selectedPreview = preview
+            dragPreviewInitialFrame = rect
         } else {
             moving = false
             hasOutline = false
@@ -195,7 +205,28 @@ final class LassoTouchView: UIView, UIGestureRecognizerDelegate {
             let location = pencil.location(in: self)
             let dx = location.x - beginning.x
             let dy = location.y - beginning.y
-            selectedPreview?.transform = CGAffineTransform(translationX: dx, y: dy)
+            // Live drag-to-tray preview. Shrink only as the OUTER EDGE of the
+            // moving selection approaches the receiving strip, not only when
+            // the stylus tip enters it. Pencil position remains the source of
+            // truth; nothing is saved until the final intentional drop.
+            let movedRect = dragPreviewInitialFrame.offsetBy(dx: dx, dy: dy)
+            let proximity = Self.proximity(of: movedRect, to: stashDropFrame)
+            if proximity > 0.01 && !wasNearStash {
+                UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.40)
+            }
+            wasNearStash = proximity > 0.01
+            onStashProximity?(proximity)
+            if let preview = selectedPreview {
+                preview.transform = CGAffineTransform(scaleX: max(0.13, 1 - proximity * 0.87),
+                                                      y: max(0.13, 1 - proximity * 0.87))
+                let originalCenter = CGPoint(x: dragPreviewInitialFrame.midX + dx,
+                                             y: dragPreviewInitialFrame.midY + dy)
+                let pull = proximity * 0.28
+                preview.center = CGPoint(
+                    x: originalCenter.x + (stashDropFrame.midX - originalCenter.x) * pull,
+                    y: originalCenter.y + (stashDropFrame.midY - originalCenter.y) * pull)
+                preview.alpha = 1 - proximity * 0.08
+            }
             let stepX = location.x - lastPoint.x
             let stepY = location.y - lastPoint.y
             points = points.map { CGPoint(x: $0.x + stepX, y: $0.y + stepY) }
@@ -223,13 +254,17 @@ final class LassoTouchView: UIView, UIGestureRecognizerDelegate {
             // view coordinate system. The previous code compared SwiftUI's
             // frame to UIWindow coordinates, which can differ by safe-area
             // and hosting view offsets.
-            if stashDropFrame != .null,
-               stashDropFrame.insetBy(dx: -22, dy: -20).contains(ending),
-               onStashDrop?() == true {
+            let movedRect = dragPreviewInitialFrame.offsetBy(
+                dx: ending.x - beginning.x, dy: ending.y - beginning.y)
+            let touchesStash = stashDropFrame != .null &&
+                (stashDropFrame.insetBy(dx: -13, dy: -11).contains(ending) ||
+                 movedRect.intersects(stashDropFrame.insetBy(dx: -8, dy: -8)))
+            if touchesStash, onStashDrop?() == true {
                 moving = false
                 hasOutline = false
                 points = []
                 redraw()
+                onStashProximity?(0)
                 let thumbnail = selectedPreview
                 selectedPreview = nil
                 let target = CGPoint(x: stashDropFrame.midX, y: stashDropFrame.midY)
@@ -255,6 +290,7 @@ final class LassoTouchView: UIView, UIGestureRecognizerDelegate {
             // A finished move must never leave a stale lasso polygon behind.
             hasOutline = false
             points = []
+            onStashProximity?(0)
             redraw()
         } else {
             if hypot(ending.x - lastPoint.x, ending.y - lastPoint.y) > 1.25 {
@@ -267,6 +303,15 @@ final class LassoTouchView: UIView, UIGestureRecognizerDelegate {
         moving = false
     }
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { resetOutline() }
+
+    // Pure geometry helper, regression-tested for corner contact with tray.
+    static func proximity(of rect: CGRect, to target: CGRect) -> CGFloat {
+        guard !target.isNull, !target.isEmpty, !rect.isEmpty else { return 0 }
+        let horizontal = max(0, target.minX - rect.maxX, rect.minX - target.maxX)
+        let vertical = max(0, target.minY - rect.maxY, rect.minY - target.maxY)
+        let distance = hypot(horizontal, vertical)
+        return max(0, min(1, 1 - distance / 120))
+    }
 }
 
 struct SystemShareSheet: UIViewControllerRepresentable {
