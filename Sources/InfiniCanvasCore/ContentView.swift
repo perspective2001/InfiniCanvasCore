@@ -39,6 +39,8 @@ struct ContentView: View {
     @State private var miniDragPoint: CGPoint? = nil
     @State private var stashProximity: CGFloat = 0
     @State private var highlightedDrop: ClipDropAction? = nil
+    @State private var clipTabFrames: [UUID: CGRect] = [:]
+    @State private var dragNearTrash = false
     @State private var showEraserOptions = false
     @State private var showHighlighterOptions = false
     @State private var showArtStudio = false
@@ -414,9 +416,18 @@ struct ContentView: View {
         // High priority on the *actual header*, not only a tiny invisible
         // strip. Taps still trigger buttons because the recognizer requires
         // a deliberate drag. Both finger and Pencil can begin the swipe here.
-        .highPriorityGesture(
-            DragGesture(minimumDistance: 13)
-                .onEnded(handleHeaderVerticalSwipe)
+        // The upper header MUST NOT steal Pencil drags from buttons / clips.
+        // The swipe is recognized only when initiated on the header's own
+        // background, not its children (Learn, Organize, Trash etc.).
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 20)
+                .onEnded { value in
+                    guard activeMiniDrag == nil,
+                          !widthPanelExpanded,
+                          store.tool != .capture else { return }
+                    handleHeaderVerticalSwipe(value)
+                },
+            including: .gesture
         )
     }
 
@@ -708,47 +719,65 @@ struct ContentView: View {
                     }.buttonStyle(.bordered)
                 }
                 penWidthTrigger
+                if store.tool == .capture || !store.stashedClips.isEmpty {
+                    stashWell
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 5)
-            }
-            if store.tool == .capture || !store.stashedClips.isEmpty {
-                stashWell
-                    .padding(.trailing, 11)
             }
         }
         .frame(height: 59)
         .background(Color(red: 0.964, green: 0.967, blue: 0.962))
         .scrollIndicators(.hidden)
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 13).onEnded { value in
-                guard abs(value.translation.height) > 24,
-                      abs(value.translation.height) > abs(value.translation.width) * 1.3
-                else { return }
-                withAnimation(.spring(response: 0.26, dampingFraction: 0.78)) {
-                    showTopBar = value.translation.height > 0
-                }
+        .background {
+            GeometryReader { geo in
+                // EVERY POINT of the drawing tools/colours strip is a valid
+                // lasso drop destination, not a tiny rounded "Drop ink" well.
+                Color.clear.preference(key: StashDropFramePreferenceKey.self,
+                    value: geo.frame(in: .named("infini-canvas-root")))
             }
+        }
+        .onPreferenceChange(StashDropFramePreferenceKey.self) { stashDropFrame = $0 }
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 20).onEnded { value in
+                guard !widthPanelExpanded, activeMiniDrag == nil,
+                      store.tool != .capture, !store.selectionActive else { return }
+                handleHeaderVerticalSwipe(value)
+            }, including: .gesture
         )
     }
 
     // Lassoed original ink stays on canvas. Only the miniature, persistent clip
     // is stashed; PencilKit restores any detached drag preview on drop.
+    // A dock LANE inside the existing colour/pen tool bar, not a separate
+    // tiny drop button. Each clip becomes a full-size draggable/reorderable tab.
     private var stashWell: some View {
         HStack(spacing: 5) {
-            Image(systemName: "tray.and.arrow.down")
-                .font(.system(size: 13, weight: .medium))
-                .opacity(store.stashedClips.isEmpty ? 0.42 : 0.75)
-            ForEach(store.stashedClips.suffix(5)) { clip in
+            ForEach(store.stashedClips) { clip in
                 if let preview = store.clipImage(clip) {
                     Image(uiImage: preview)
-                        .resizable().scaledToFit()
-                        .frame(width: 35, height: 26)
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                        .padding(3)
-                        .background(teal.opacity(0.10),
-                                    in: RoundedRectangle(cornerRadius: 9))
-                        .contentShape(RoundedRectangle(cornerRadius: 9))
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 61, height: 38)
+                        .padding(.horizontal, 5)
+                        .frame(width: 75, height: 48)
+                        .background(.thinMaterial,
+                                    in: RoundedRectangle(cornerRadius: 12))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 12)
+                                .strokeBorder(.white.opacity(0.52), lineWidth: 0.9)
+                                .allowsHitTesting(false)
+                        }
+                        .background {
+                            GeometryReader { geo in
+                                Color.clear.preference(
+                                    key: ClipTabFramePreferenceKey.self,
+                                    value: [clip.id:
+                                        geo.frame(in: .named("infini-canvas-root"))])
+                            }
+                        }
+                        .contentShape(RoundedRectangle(cornerRadius: 12))
                         .gesture(
                             DragGesture(minimumDistance: 3,
                                         coordinateSpace: .named("infini-canvas-root"))
@@ -756,16 +785,25 @@ struct ContentView: View {
                                     activeMiniDrag = clip.id
                                     miniDragPoint = value.location
                                     highlightedDrop = clipTargetFrames.first(where: {
-                                        $0.value.insetBy(dx: -16, dy: -12).contains(value.location)
+                                        $0.value.insetBy(dx: -16, dy: -12)
+                                            .contains(value.location)
                                     })?.key
                                 }
                                 .onEnded { value in
-                                    if let target = clipTargetFrames.first(where: {
-                                        $0.value.insetBy(dx: -16, dy: -12).contains(value.location)
+                                    if let action = clipTargetFrames.first(where: {
+                                        $0.value.insetBy(dx: -16, dy: -12)
+                                            .contains(value.location)
                                     })?.key {
-                                        _ = handleClipDrop(clip.id, action: target)
+                                        _ = handleClipDrop(clip.id, action: action)
+                                    } else if let other = clipTabFrames.first(where: {
+                                        $0.key != clip.id && $0.value
+                                            .insetBy(dx: -8, dy: -8)
+                                            .contains(value.location)
+                                    })?.key {
+                                        _ = store.moveStashedClip(clip.id, before: other)
                                     }
-                                    withAnimation(.spring(response: 0.25, dampingFraction: 0.77)) {
+                                    withAnimation(.spring(response: 0.23,
+                                                          dampingFraction: 0.77)) {
                                         activeMiniDrag = nil
                                         miniDragPoint = nil
                                         highlightedDrop = nil
@@ -773,11 +811,10 @@ struct ContentView: View {
                                 }
                         )
                         .simultaneousGesture(
-                            LongPressGesture(minimumDuration: 0.48).onEnded { _ in
-                                withAnimation(.spring(response: 0.22, dampingFraction: 0.8)) {
-                                    editingMiniClips = true
+                            LongPressGesture(minimumDuration: 0.48)
+                                .onEnded { _ in
+                                    withAnimation { editingMiniClips = true }
                                 }
-                            }
                         )
                         .overlay(alignment: .topTrailing) {
                             if editingMiniClips {
@@ -791,41 +828,26 @@ struct ContentView: View {
                                 }
                                 .buttonStyle(.plain)
                                 .offset(x: 6, y: -7)
-                                .accessibilityLabel("Move saved \(clip.title) thumbnail to Trash")
                             }
                         }
-                        .accessibilityLabel("Drag handwriting mini-card to Learn, ChatGPT or Organizer; hold to reveal delete")
+                        .accessibilityLabel("Ink tab \(clip.title), drag to reorder or to upper bar functions; hold for delete")
                 }
             }
             if store.stashedClips.isEmpty {
-                Text("Drop ink")
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.secondary)
+                // The whole toolbar receives the ink. This is only an inline
+                // quiet hint, not a small isolated drop destination.
+                Text("Drop anywhere on this bar")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary.opacity(0.68))
+                    .frame(minWidth: 146, minHeight: 42)
+                    .padding(.horizontal, 7)
             }
         }
-        .frame(minWidth: 134, minHeight: 44)
-        .padding(.horizontal, 10)
-        .background(.thinMaterial, in: Capsule())
-        .overlay(Capsule().stroke(teal.opacity(0.16 + stashProximity * 0.54),
-                                  lineWidth: 0.6 + stashProximity * 1.4))
-        .scaleEffect(1 + stashProximity * 0.035)
-        .animation(.spring(response: 0.22, dampingFraction: 0.75),
-                   value: stashProximity)
-        .background {
-            GeometryReader { geo in
-                Color.clear.preference(
-                    key: StashDropFramePreferenceKey.self,
-                    value: geo.frame(in: .named("infini-canvas-root")))
-            }
+        .animation(.spring(response: 0.27, dampingFraction: 0.80),
+                   value: store.stashedClipIDs)
+        .onPreferenceChange(ClipTabFramePreferenceKey.self) {
+            clipTabFrames = $0
         }
-        .onPreferenceChange(StashDropFramePreferenceKey.self) { stashDropFrame = $0 }
-        .simultaneousGesture(TapGesture().onEnded {
-            // Deliberate accessibility fallback for physical iPad variations
-            // in Pencil touch routing. This does not replace drag-to-tray.
-            if store.selectionActive { _ = store.stashSelectedInk() }
-        })
-        .accessibilityHint("Drag selected handwriting here, or tap to stash the active lasso")
-        .animation(.spring(response: 0.3, dampingFraction: 0.77), value: store.stashedClipIDs.count)
     }
 
     // Destination targets belong in the FIRST (logo + RestSafe) command bar.
@@ -1381,6 +1403,14 @@ private struct PenSizeFramePreferenceKey: PreferenceKey {
     static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
         let frame = nextValue()
         if frame != .null { value = frame }
+    }
+}
+
+private struct ClipTabFramePreferenceKey: PreferenceKey {
+    static var defaultValue: [UUID: CGRect] = [:]
+    static func reduce(value: inout [UUID: CGRect],
+                       nextValue: () -> [UUID: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
     }
 }
 
