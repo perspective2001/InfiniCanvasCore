@@ -25,7 +25,7 @@
 - A visual diff that wasn't requested requires user review before merge, even if all CI checks are green.
 
 ## Native capture setup (CI)
-The Xcode host job in `.github/workflows/validate-apple-sdk.yml` compiles an actual app, boots an iPad simulator, installs it and captures its rendered screen with `xcrun simctl io screenshot`, then uploads the image artifact. This captures the root app at rest; interaction states still need their own reproducible native capture. If the simulator has no iPad runtime, the screenshot job should fail openly instead of silently fabricating an image. The captured artifact must be actually **opened and looked at** by the assistant before any claimed visual judgment.
+The iOS 26 PencilKit test job in `.github/workflows/validate-apple-sdk.yml` already runs an iPad simulator; it compiles the actual CI host app, installs it on the working test simulator and captures its rendered screen with `xcrun simctl io screenshot`, then uploads the image artifact. This captures the root app at rest; interaction states still need their own reproducible native capture. If the simulator has no iPad runtime, the screenshot job should fail openly instead of silently fabricating an image. The captured artifact must be actually **opened and looked at** by the assistant before any claimed visual judgment.
 
 ## Fast comparison / approvals
 Use `docs/CURRENT_WORKING_STATE.md` on every chat resume. Don't re-ingest the full chat. Lock the accepted view and compare the NEW native render against it. If visual differences were not explicitly requested, don't modify those parts. Merge only when the physical device-tested exact SHA is explicitly approved by the user.
