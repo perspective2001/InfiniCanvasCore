@@ -772,7 +772,29 @@ struct ContentView: View {
                                     }
                                 }
                         )
-                        .accessibilityLabel("Drag handwriting mini-card to Learn, ChatGPT or Organizer")
+                        .simultaneousGesture(
+                            LongPressGesture(minimumDuration: 0.48).onEnded { _ in
+                                withAnimation(.spring(response: 0.22, dampingFraction: 0.8)) {
+                                    editingMiniClips = true
+                                }
+                            }
+                        )
+                        .overlay(alignment: .topTrailing) {
+                            if editingMiniClips {
+                                Button(role: .destructive) {
+                                    store.deleteClip(clip)
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.system(size: 18))
+                                        .foregroundStyle(.red)
+                                        .background(.white, in: Circle())
+                                }
+                                .buttonStyle(.plain)
+                                .offset(x: 6, y: -7)
+                                .accessibilityLabel("Move saved \(clip.title) thumbnail to Trash")
+                            }
+                        }
+                        .accessibilityLabel("Drag handwriting mini-card to Learn, ChatGPT or Organizer; hold to reveal delete")
                 }
             }
             if store.stashedClips.isEmpty {
@@ -893,6 +915,21 @@ struct ContentView: View {
                                         .frame(width: 70, height: 62)
                                     }
                                     .buttonStyle(.plain)
+                                    .onLongPressGesture(minimumDuration: 0.48) {
+                                        withAnimation { editingMiniClips = true }
+                                    }
+                                    .overlay(alignment: .topTrailing) {
+                                        if editingMiniClips {
+                                            Button(role: .destructive) { store.deleteClip(clip) } label: {
+                                                Image(systemName: "xmark.circle.fill")
+                                                    .font(.system(size: 17))
+                                                    .foregroundStyle(.red)
+                                                    .background(.white, in: Circle())
+                                            }
+                                            .buttonStyle(.plain)
+                                            .offset(x: 7, y: -5)
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1067,6 +1104,22 @@ struct ContentView: View {
                                 .overlay(Capsule().stroke(teal.opacity(0.16)))
                         }
                         .buttonStyle(.plain)
+                        .onLongPressGesture(minimumDuration: 0.48) {
+                            withAnimation { editingAreaLabels = true }
+                        }
+                        .overlay(alignment: .topTrailing) {
+                            if editingAreaLabels {
+                                Button(role: .destructive) { store.deleteArea(area) } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.system(size: 21))
+                                        .foregroundStyle(.red)
+                                        .background(.white, in: Circle())
+                                }
+                                .buttonStyle(.plain)
+                                .offset(x: 10, y: -10)
+                                .accessibilityLabel("Remove \(area.title) categorization; preserve ink")
+                            }
+                        }
                         .position(x: p.x, y: p.y)
                     }
                 }
@@ -1098,7 +1151,24 @@ struct ContentView: View {
                             .padding(12)
                             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
                             .overlay(RoundedRectangle(cornerRadius: 14).stroke(teal.opacity(0.35)))
-                        }.buttonStyle(.plain)
+                        }
+                        .buttonStyle(.plain)
+                        .onLongPressGesture(minimumDuration: 0.48) {
+                            withAnimation { editingAreaLabels = true }
+                        }
+                        .overlay(alignment: .topTrailing) {
+                            if editingAreaLabels {
+                                Button(role: .destructive) { store.deleteArea(area) } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.system(size: 21))
+                                        .foregroundStyle(.red)
+                                        .background(.white, in: Circle())
+                                }
+                                .buttonStyle(.plain)
+                                .offset(x: 10, y: -10)
+                                .accessibilityLabel("Remove \(area.title) category from canvas")
+                            }
+                        }
                         .position(x: p.x, y: p.y)
                     }
                 }
