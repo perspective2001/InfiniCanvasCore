@@ -2,6 +2,14 @@
 
 Read this before editing or releasing. These rules are persistent repository instructions, **not** a claim that a ChatGPT conversation's global settings have changed.
 
+## Fast session resume and visual proof (mandatory)
+
+1. Read [current one-page state](docs/CURRENT_WORKING_STATE.md) **first**, then this file and only the affected implementation file(s). Do not reread an entire old conversation or rewrite known-good unrelated code.
+2. For changes with visible effects, identify the existing native visual baseline; use the exact-source screenshot artifact created by the existing host validation job. **Open and inspect its pixels** before claiming visual correctness. A compiled/green CI job is not aesthetic proof.
+3. For animation, static frames are not enough: record real native motion from the same SwiftUI component (or provide a device-test branch). Do not substitute unrelated mockups or hand-crafted shapes.
+4. Write one observable before/after plus **what must not change** from [visual acceptance matrix](docs/VISUAL_ACCEPTANCE_MATRIX.md). Review the diff for collateral UI changes.
+5. Approval only after actual iPad check of latest SHA; then update one-page state with what is verified. Preserve user pressure sensitivity and screen-relative width semantics.
+
 ## Non-negotiable user requirements
 - Keep one permanent iPad Swift Playgrounds host, installed documents/data and bundle ID intact.
 - App remains fully native SwiftUI + UIKit + PencilKit; no web canvas replacement.
