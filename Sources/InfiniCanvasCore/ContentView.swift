@@ -779,6 +779,7 @@ struct ContentView: View {
                             }
                         }
                         .contentShape(RoundedRectangle(cornerRadius: 12))
+                        .hoverEffect(.lift)
                         .gesture(
                             DragGesture(minimumDistance: 3,
                                         coordinateSpace: .named("infini-canvas-root"))
@@ -884,6 +885,7 @@ struct ContentView: View {
                         // Finger tap on Organize jumps there; dragging ink onto it adds.
                         if action == .organize { store.openSpatialOrganizer() }
                     }
+                    .hoverEffect(.highlight)
                     .accessibilityLabel(action == .organize
                                         ? "Organize: tap to navigate, drop a clip to store"
                                         : "Drop a stashed handwriting clip into \(action.rawValue)")
@@ -1021,6 +1023,7 @@ struct ContentView: View {
             }
         }
         .onPreferenceChange(PenSizeFramePreferenceKey.self) { penSizeFrame = $0 }
+        .hoverEffect(.lift)
         .accessibilityLabel("Base size \(String(format: "%.1f", Double(activeSize))) points")
         .accessibilityHint("Swipe up to resize with the liquid stroke, lift to collapse; tap for details")
         .highPriorityGesture(DragGesture(minimumDistance: 7)
