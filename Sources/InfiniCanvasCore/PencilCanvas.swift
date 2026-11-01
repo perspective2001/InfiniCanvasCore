@@ -134,7 +134,9 @@ final class LassoTouchView: UIView, UIGestureRecognizerDelegate {
         addGestureRecognizer(pinch)
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handleFingerPan(_:)))
         pan.minimumNumberOfTouches = 1
-        pan.maximumNumberOfTouches = 1
+        // Let deliberate two-finger translation continue when an extra finger
+        // touches the screen. The pinch handler takes precedence while scaling.
+        pan.maximumNumberOfTouches = 2
         pan.delegate = self
         pan.cancelsTouchesInView = false
         addGestureRecognizer(pan)
@@ -143,7 +145,11 @@ final class LassoTouchView: UIView, UIGestureRecognizerDelegate {
     required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         // Filter broad stationary palm contacts from custom overlay navigation.
-        touch.type == .direct && touch.majorRadius < 27
+        // iPad direct finger radius fluctuates with contact angle. The older
+        // 27pt cutoff rejected legitimate broad finger touches, leaving the
+        // full-screen ink overlay unable to pan horizontally at all.
+        // Keep a finite cutoff to ignore large palm contacts.
+        touch.type == .direct && touch.majorRadius < 38
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
