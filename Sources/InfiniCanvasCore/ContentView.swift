@@ -745,6 +745,12 @@ struct ContentView: View {
             }
         }
         .onPreferenceChange(StashDropFramePreferenceKey.self) { stashDropFrame = $0 }
+        .simultaneousGesture(TapGesture().onEnded {
+            // Deliberate accessibility fallback for physical iPad variations
+            // in Pencil touch routing. This does not replace drag-to-tray.
+            if store.selectionActive { _ = store.stashSelectedInk() }
+        })
+        .accessibilityHint("Drag selected handwriting here, or tap to stash the active lasso")
         .animation(.spring(response: 0.3, dampingFraction: 0.77), value: store.stashedClipIDs.count)
     }
 
