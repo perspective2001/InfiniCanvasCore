@@ -313,6 +313,9 @@ final class CanvasStore: ObservableObject {
         // Pencil-only drawing rejects finger/palm ink. The system handles
         // single-finger scrolling and two-finger pinch on the main canvas.
         view.isScrollEnabled = true
+        // Do not restrict lateral movement after vertical navigation.
+        // A direction-locked UIScrollView can feel like a stuck horizontal pan.
+        view.isDirectionalLockEnabled = false
         view.panGestureRecognizer.minimumNumberOfTouches = 1
         // RestSafe constrains panning to a deliberate single finger; when off,
         // Navigate also permits two-finger panning. Native pinch remains enabled.
