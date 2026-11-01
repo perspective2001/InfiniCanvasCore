@@ -139,23 +139,41 @@ final class CanvasStore: ObservableObject {
         didSet {
             // Lasso selection belongs to the lasso overlay, not the next pen/eraser.
             if oldValue == .capture && tool != .capture { clearSelection() }
+            applyZoomCompensatedNib()
             updateTool()
         }
     }
     @Published var inkColor = UIColor(red: 0.10, green: 0.16, blue: 0.20, alpha: 1) { didSet { updateTool() } }
-    @Published var strokeWidth: CGFloat = 2.5 { didSet { updateTool() } }
+    @Published var strokeWidth: CGFloat = 2.5 {
+        didSet {
+            if !adjustingZoomNib && tool != .capture && tool != .eraser &&
+                !(tool == .marker && fixedHighlighter) {
+                selectedScreenWidths[tool] = nominalToolWidth * max(zoom, 0.045)
+            }
+            updateTool()
+        }
+    }
     @Published var penProfile: PenProfile = .fluid {
         didSet { UserDefaults.standard.set(penProfile.rawValue, forKey: "InfiniCanvas.penProfile"); updateTool() }
     }
     // Fixed nib is a dedicated Pencil-only renderer, not a claim that native PencilKit locks tilt.
     @Published var fixedHighlighter = true {
-        didSet { UserDefaults.standard.set(fixedHighlighter, forKey: "InfiniCanvas.fixedHighlighter"); updateTool() }
+        didSet {
+            UserDefaults.standard.set(fixedHighlighter, forKey: "InfiniCanvas.fixedHighlighter")
+            if tool == .marker { applyZoomCompensatedNib() }
+            updateTool()
+        }
     }
     @Published var markerHeight: CGFloat = 22 {
         didSet { UserDefaults.standard.set(Double(markerHeight), forKey: "InfiniCanvas.markerHeight") }
     }
     @Published var markerWidth: CGFloat = 5 {
-        didSet { UserDefaults.standard.set(Double(markerWidth), forKey: "InfiniCanvas.markerWidth") }
+        didSet {
+            UserDefaults.standard.set(Double(markerWidth), forKey: "InfiniCanvas.markerWidth")
+            if !adjustingZoomNib && tool == .marker && fixedHighlighter {
+                selectedScreenWidths[.marker] = markerWidth * max(zoom, 0.045)
+            }
+        }
     }
     @Published var paper: PaperStyle = .blank { didSet { canvas?.backgroundColor = Self.paperBackground(paper); saveIndex() } }
     @Published var clips: [SavedClip] = []
@@ -181,11 +199,58 @@ final class CanvasStore: ObservableObject {
     @Published var selectionActive = false
     @Published var isSaved = true
     @Published var eraserPrecision: EraserPrecision = .detail { didSet { updateTool() } }
-    @Published var eraserWidth: CGFloat = 12 { didSet { updateTool() } }
+    @Published var eraserWidth: CGFloat = 12 {
+        didSet {
+            if !adjustingZoomNib && tool == .eraser {
+                selectedScreenWidths[.eraser] = eraserWidth * max(zoom, 0.045)
+            }
+            updateTool()
+        }
+    }
     @Published var mode: StudioMode = .notes { didSet { updateTool() } }
     @Published var focusAreaID: UUID? = nil
     @Published var zoom: CGFloat = 1
     @Published var offset: CGPoint = .zero
+
+    // The user selects a NIB WIDTH IN SCREEN POINTS. Unlike existing ink,
+    // new strokes must not become visually wider when the viewport is zoomed.
+    // Preserve per-utensil targets and convert to canvas coordinates on zoom.
+    private var selectedScreenWidths: [CanvasTool: CGFloat] = [
+        .pen: 2.5, .pencil: 2.5, .marker: 5, .eraser: 12
+    ]
+    private var adjustingZoomNib = false
+    var selectedScreenNibWidth: CGFloat {
+        selectedScreenWidths[tool] ?? nominalToolWidth * max(zoom, 0.045)
+    }
+
+    func setSelectedScreenNibWidth(_ screenPoints: CGFloat) {
+        guard tool != .capture, screenPoints.isFinite else { return }
+        selectedScreenWidths[tool] = max(0.4, min(500, screenPoints))
+        applyZoomCompensatedNib()
+    }
+
+    // Screen width = native PencilKit base width × canvas zoom. The same
+    // visible 20pt nib therefore uses 40 canvas points at 50% zoom, and
+    // 10 canvas points at 200% zoom. Existing strokes are never rescaled.
+    private func applyZoomCompensatedNib() {
+        guard tool != .capture, !adjustingZoomNib else { return }
+        adjustingZoomNib = true
+        defer { adjustingZoomNib = false }
+        let screen = selectedScreenNibWidth
+        let canvasWidth = screen / max(zoom, 0.045)
+        switch tool {
+        case .pen, .pencil:
+            strokeWidth = canvasWidth
+        case .marker:
+            if fixedHighlighter { markerWidth = canvasWidth }
+            else { strokeWidth = canvasWidth / 4 }
+        case .eraser:
+            eraserWidth = canvasWidth
+        case .capture:
+            break
+        }
+        updateTool()
+    }
 
     private(set) var initialDrawing = PKDrawing()
     weak var canvas: PKCanvasView?
@@ -543,7 +608,11 @@ final class CanvasStore: ObservableObject {
     }
     func refreshViewport() {
         guard let view = canvas else { return }
-        zoom = view.zoomScale
+        let newZoom = view.zoomScale
+        if abs(newZoom - zoom) > 0.0001 {
+            zoom = newZoom
+            applyZoomCompensatedNib()
+        }
         offset = view.contentOffset
     }
     func worldCenter() -> CGPoint {
