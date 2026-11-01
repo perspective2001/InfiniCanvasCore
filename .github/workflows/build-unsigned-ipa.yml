@@ -138,10 +138,40 @@ jobs:
           echo "IPA_ARTIFACT=InfiniCanvas-unsigned-$IDENTITY_MODE" >> "$GITHUB_ENV"
           echo "PASS: unsigned IPA assembled; Sideloadly must sign it on the user's Windows PC"
 
+      - name: Record exact source and validation limits with the download
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_SHA="$(git rev-parse HEAD)"
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            STATUS="APPLE_SOURCE_CI_PASSED__PHYSICAL_IPAD_UNVERIFIED"
+          else
+            STATUS="MANUAL_OR_VERSION_TRIGGER__APPLE_SOURCE_CI_NOT_ASSERTED__PHYSICAL_IPAD_UNVERIFIED"
+          fi
+          cat > InfiniCanvas-BUILD-INFO.txt <<EOF
+          Repository: ${GITHUB_REPOSITORY}
+          Source commit: ${SOURCE_SHA}
+          Requested ref: ${GITHUB_REF}
+          Workflow event: ${GITHUB_EVENT_NAME}
+          Actions run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          IPA artifact: ${IPA_ARTIFACT}
+          Evidence: ${STATUS}
+          WARNING: Compile success does NOT prove Pencil width, native glass morph, lasso behavior, or physical gesture acceptance.
+          Keep existing iPad app and its data; do not uninstall to update.
+          EOF
+          {
+            echo "### IPA provenance"
+            echo "- **Source SHA:** \`${SOURCE_SHA}\`"
+            echo "- **Evidence:** ${STATUS}"
+            echo "- **On-device verified:** NO"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
       - name: Upload unsigned IPA (not an installed/signed app)
         uses: actions/upload-artifact@v6
         with:
           name: ${{ env.IPA_ARTIFACT }}
-          path: ${{ env.IPA_NAME }}
+          path: |
+            ${{ env.IPA_NAME }}
+            InfiniCanvas-BUILD-INFO.txt
           if-no-files-found: error
           retention-days: 14
