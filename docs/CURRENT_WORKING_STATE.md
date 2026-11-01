@@ -1,6 +1,11 @@
 # CURRENT WORKING STATE — InfiniCanvas
 *Always read this one page before an InfiniCanvas edit; update only when a decision or verified state changes. Last updated 2026-11-01.*
 
+## Nov 1 additional user-reported RestSafe and deletion defects
+- **Existing app only.** The user reports intermittent inability to pan horizontally (left/right) while RestSafe is active, plus an inserted text/link item they cannot remove. Never reset/reinstall the permanent app or change its data model merely to address these.
+- **Draft [PR #26](https://github.com/perspective2001/InfiniCanvasCore/pull/26):** removed the RestSafe hit-test gate that blocked inserted notes and area pins; restored long-press Edit / Trash and a top-trash offscreen item list/restore, with explicit editing-only note drag. Improved horizontal pan recognition across native canvas/lasso/fixed-highlighter paths. This is implemented on a branch only; physical Pencil/finger tests and exact-SHA screenshots still required. Avoid claiming all navigation is fixed until tested on actual hardware.
+- **Accepted behaviour:** one-finger navigation in RestSafe and two-finger zoom; Pencil-only ink remains protected. Long-hold an existing inserted note/link to remove it, or use existing top trash menu; soft-deletion must preserve ink and backup. Keep previously accepted toolbar controls untouched. If the inserted object turns out to be a different type from TypedNote, inspect its actual model before inventing removal code.
+
 ## Nov 1 follow-up: active work, not an approved release
 - **Actual pixels retrieved in a fresh chat:** run [41328989188](https://github.com/perspective2001/InfiniCanvasCore/actions/runs/41328989188), artifact ID 13092941083, yielded a real 2064×2752 native simulator PNG. Re-downloaded and visually opened; shows the real resting toolbars (width pill 2.5) and blank canvas, *not* a morph or handwriting proof.
 - **Draft [PR #23](https://github.com/perspective2001/InfiniCanvasCore/pull/23):** raises boot readiness from 55s to 150s, preserves screenshot-failure diagnostics. A subsequent main run failed at the 55s boot cap *after* successful compilation/tests. Keep this PR pending until its exact-SHA screenshot run succeeds.
