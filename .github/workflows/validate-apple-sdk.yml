@@ -76,7 +76,7 @@ jobs:
         # Capture candidate visuals even when a separate width assertion fails.
         # CI remains RED; screenshots diagnose failures, never bypass them.
         if: always()
-        timeout-minutes: 11
+        timeout-minutes: 14
         shell: bash
         run: |
           set -euo pipefail
@@ -115,17 +115,21 @@ jobs:
           try:
               cmd('xcrun','simctl','bootstatus',sid,'-b',seconds=150)
           except (subprocess.TimeoutExpired, subprocess.CalledProcessError):
-              diagnostic = subprocess.run(
-                  ['xcrun','simctl','list','devices','available'],
-                  capture_output=True, text=True, timeout=20)
+              try:
+                  diagnostic = subprocess.run(
+                      ['xcrun','simctl','list','devices','available'],
+                      capture_output=True, text=True, timeout=20)
+                  details=diagnostic.stdout+'\\n'+diagnostic.stderr
+              except subprocess.TimeoutExpired:
+                  details='Simulator control service did not respond within 20s'
               (dest/'simulator-startup-failure.txt').write_text(
                   'Simulator: '+sim['name']+' ['+sid+']\\n'
                   'Runner: '+os.environ.get('RUNNER_NAME','unknown')+'\\n'
-                  'Devices: '+diagnostic.stdout+'\\n'+diagnostic.stderr)
+                  'Devices: '+details)
               print('::error::iPad Simulator failed to boot; capture NOT verified',flush=True)
               raise
-          cmd('xcrun','simctl','install',sid,os.environ['APP'],seconds=45)
-          cmd('xcrun','simctl','launch',sid,'com.perspective2001.infini-canvas.native',seconds=35)
+          cmd('xcrun','simctl','install',sid,os.environ['APP'],seconds=115)
+          cmd('xcrun','simctl','launch',sid,'com.perspective2001.infini-canvas.native',seconds=80)
           time.sleep(5)
           shot=dest/'native-ipad-root.png'
           cmd('xcrun','simctl','io',sid,'screenshot','--type=png',str(shot),seconds=30)
@@ -148,7 +152,7 @@ jobs:
                              timeout=25,check=False)
               cmd('xcrun','simctl','launch',sid,
                   'com.perspective2001.infini-canvas.native',
-                  '--infini-visual-morph='+str(percentage), seconds=40)
+                  '--infini-visual-morph='+str(percentage), seconds=85)
               time.sleep(3)
               state_shot=dest/('native-width-morph-'+str(percentage)+'.png')
               cmd('xcrun','simctl','io',sid,'screenshot','--type=png',
@@ -169,7 +173,7 @@ jobs:
               time.sleep(1)
               cmd('xcrun','simctl','launch',sid,
                   'com.perspective2001.infini-canvas.native',
-                  '--infini-visual-morph-animation', seconds=40)
+                  '--infini-visual-morph-animation', seconds=85)
               time.sleep(4)
           finally:
               if recorder.poll() is None:
