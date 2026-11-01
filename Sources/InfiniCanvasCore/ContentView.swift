@@ -127,10 +127,12 @@ struct ContentView: View {
                     // The WHOLE Siri-like liquid bubble rises and grows. Its
                     // bottom stays anchored to the exact size-pill location.
                     .frame(width: min(620, max(84, visibleSize + 36)),
-                           height: 44 + max(8, widthMorphTravel))
+                           height: min(penSizeFrame.maxY - 5,
+                                       44 + max(8, widthMorphTravel)))
                     .position(x: penSizeFrame.midX,
                               y: penSizeFrame.maxY -
-                              (44 + max(8, widthMorphTravel)) / 2)
+                                  min(penSizeFrame.maxY - 5,
+                                      44 + max(8, widthMorphTravel)) / 2)
                     .zIndex(100)
                     .allowsHitTesting(false)
                     .transition(.scale(scale: 0.18, anchor: .bottom).combined(with: .opacity))
