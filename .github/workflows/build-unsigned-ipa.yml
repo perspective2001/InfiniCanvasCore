@@ -19,6 +19,12 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/build-unsigned-ipa.yml'
+  # A new preview is made automatically from the exact main-branch commit
+  # that passed the full Xcode 27 + PencilKit simulator gates.
+  workflow_run:
+    workflows: ["Validate Infini Canvas on Apple SDK"]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: read
@@ -30,6 +36,13 @@ concurrency:
 
 jobs:
   unsigned-ipad:
+    # Ignore PR validation runs and failed quality checks. Only a successful
+    # PUSH to main can trigger an automatic ready-to-download preview.
+    if: >-
+      ${{ github.event_name != 'workflow_run' ||
+          (github.event.workflow_run.conclusion == 'success' &&
+           github.event.workflow_run.event == 'push' &&
+           github.event.workflow_run.head_branch == 'main') }}
     name: Compile device IPA without signing or Mac rental
     runs-on: xcode-27
     timeout-minutes: 25
@@ -37,6 +50,9 @@ jobs:
       - name: Check out source (no signing secrets)
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
+          # Pin the binary to the *validated* commit, not whichever new main
+          # commit happens to exist by the time the runner starts.
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
           persist-credentials: false
           fetch-depth: 2
 
@@ -86,6 +102,8 @@ jobs:
             *) echo "Unknown app identity; refusing to build" >&2; exit 1 ;;
           esac
           VERSION="$(tr -d '\r\n ' < SWIFT_PACKAGE_VERSION)"
+          SOURCE_SHA="$(git rev-parse HEAD)"
+          echo "Exact compiled source: $SOURCE_SHA; event=${{ github.event_name }}"
           BUILD_NUMBER="$((10000 + GITHUB_RUN_NUMBER))"
           echo "Building $VERSION ($BUILD_NUMBER), identity=$BUNDLE_ID (no user data included)"
           xcodebuild -project IntegrationHost/InfiniCanvasHost.xcodeproj \
