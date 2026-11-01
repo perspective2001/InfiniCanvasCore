@@ -181,6 +181,58 @@ final class CanvasCoreTests: XCTestCase {
         window.isHidden = true
     }
 
+    func testNominalToolWidthMatchesActualPencilKitConfiguration() {
+        let store = CanvasStore()
+        store.strokeWidth = 8
+        store.tool = .pen
+        XCTAssertEqual(store.nominalToolWidth, 8)
+        store.tool = .pencil
+        XCTAssertEqual(store.nominalToolWidth, 8)
+        store.tool = .marker
+        store.fixedHighlighter = false
+        XCTAssertEqual(store.nominalToolWidth, 32,
+                       "Preview must include native marker's 4× actual nib width")
+        store.fixedHighlighter = true
+        XCTAssertEqual(store.nominalToolWidth, store.markerWidth,
+                       "Fixed vertical highlighter uses its own nib geometry")
+        store.tool = .eraser
+        store.eraserWidth = 46
+        XCTAssertEqual(store.nominalToolWidth, 46)
+    }
+
+    func testStashedTabsReorderWithoutChangingCanvasInk() throws {
+        let store = CanvasStore()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
+        let canvas = PKCanvasView(frame: window.bounds)
+        canvas.minimumZoomScale = 0.045
+        canvas.maximumZoomScale = 10
+        canvas.contentSize = CGSize(width: 12000, height: 12000)
+        window.addSubview(canvas)
+        let overlay = UIView(frame: window.bounds)
+        window.addSubview(overlay)
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+        store.attach(canvas)
+        store.tool = .capture
+        canvas.drawing = PKDrawing(strokes: [makeStroke(.pen, x: 200, y: 200)])
+        let original = canvas.drawing.dataRepresentation()
+        let outline = [CGPoint(x: 145, y: 150), CGPoint(x: 265, y: 150),
+                       CGPoint(x: 265, y: 255), CGPoint(x: 145, y: 255)]
+        store.captureLasso(outline, from: overlay)
+        let first = try XCTUnwrap(store.latestClip)
+        XCTAssertTrue(store.stashSelectedInk())
+        store.captureLasso(outline, from: overlay)
+        let second = try XCTUnwrap(store.latestClip)
+        XCTAssertTrue(store.stashSelectedInk())
+        XCTAssertEqual(store.stashedClips.suffix(2).map(\.id), [first.id, second.id])
+        XCTAssertTrue(store.moveStashedClip(second.id, before: first.id))
+        XCTAssertEqual(store.stashedClips.suffix(2).map(\.id), [second.id, first.id])
+        XCTAssertFalse(store.moveStashedClip(second.id, before: second.id))
+        XCTAssertEqual(canvas.drawing.dataRepresentation(), original,
+                       "Reordering tabs must never modify source handwriting")
+        window.isHidden = true
+    }
+
     func testStashShrinksOnCornerApproachWithoutFalseFarAwayHit() {
         let target = CGRect(x: 780, y: 105, width: 150, height: 38)
         let far = CGRect(x: 100, y: 500, width: 120, height: 90)
