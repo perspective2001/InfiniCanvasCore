@@ -1102,9 +1102,17 @@ final class CanvasStore: ObservableObject {
         guard let i = clips.firstIndex(where: { $0.id == clip.id }) else { return }
         clips[i].isPinned = clips[i].isPinned != true; saveIndex()
     }
+    // Soft-delete a saved thumbnail only. Never remove its original strokes.
+    // Remove any toolbar / organizer references immediately so no ghost tile
+    // remains after a clip has been moved to Trash.
     func deleteClip(_ clip: SavedClip) {
         guard let i = clips.firstIndex(where: { $0.id == clip.id }) else { return }
-        clips[i].isTrashed = true; saveIndex(); status = "Clip moved to Trash"
+        clips[i].isTrashed = true
+        stashedClipIDs.removeAll { $0 == clip.id }
+        organizedClipIDs.removeAll { $0 == clip.id }
+        if latestClip?.id == clip.id { latestClip = nil }
+        saveIndex()
+        status = "Saved clip moved to Trash · canvas ink preserved"
     }
     func restoreClip(_ clip: SavedClip) {
         guard let i = clips.firstIndex(where: { $0.id == clip.id }) else { return }
@@ -1229,7 +1237,13 @@ final class CanvasStore: ObservableObject {
     }
     func deleteArea(_ area: CanvasArea) {
         guard let i = areas.firstIndex(where: { $0.id == area.id }) else { return }
-        areas[i].isTrashed = true; saveIndex(); status = "Area label in Trash · ink untouched"
+        areas[i].isTrashed = true
+        if focusAreaID == area.id { focusAreaID = nil }
+        // The organizer can be recreated if its label was deliberately removed;
+        // never delete the separately saved organized clips.
+        if organizerAreaID == area.id { organizerAreaID = nil }
+        saveIndex()
+        status = "Area categorization moved to Trash · handwriting untouched"
     }
     func restoreArea(_ area: CanvasArea) {
         guard let i = areas.firstIndex(where: { $0.id == area.id }) else { return }

@@ -133,6 +133,54 @@ final class CanvasCoreTests: XCTestCase {
         window.isHidden = true
     }
 
+    func testSoftDeleteAreaAndSavedThumbDoesNotEraseInkAndCanRestore() throws {
+        let store = CanvasStore()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
+        let canvas = PKCanvasView(frame: window.bounds)
+        canvas.minimumZoomScale = 0.045
+        canvas.maximumZoomScale = 10
+        canvas.contentSize = CGSize(width: 12000, height: 12000)
+        window.addSubview(canvas)
+        let overlay = UIView(frame: window.bounds)
+        window.addSubview(overlay)
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+        store.attach(canvas)
+        store.tool = .capture
+
+        canvas.drawing = PKDrawing(strokes: [makeStroke(.pen, x: 220, y: 245)])
+        let originalInk = canvas.drawing.dataRepresentation()
+        store.addArea("LING Categorization")
+        let area = try XCTUnwrap(store.areas.last)
+        XCTAssertEqual(area.title, "LING Categorization")
+
+        let boundary = [CGPoint(x: 140, y: 175), CGPoint(x: 320, y: 175),
+                        CGPoint(x: 320, y: 315), CGPoint(x: 140, y: 315)]
+        store.captureLasso(boundary, from: overlay)
+        let clip = try XCTUnwrap(store.latestClip)
+        XCTAssertTrue(store.stashSelectedInk())
+        XCTAssertTrue(store.stashedClips.contains(where: { $0.id == clip.id }))
+        XCTAssertTrue(store.addToSpatialOrganizer(clip.id))
+        XCTAssertTrue(store.spatialOrganizerClips.contains(where: { $0.id == clip.id }))
+
+        store.deleteClip(clip)
+        XCTAssertFalse(store.stashedClips.contains(where: { $0.id == clip.id }))
+        XCTAssertFalse(store.spatialOrganizerClips.contains(where: { $0.id == clip.id }))
+        XCTAssertTrue(store.discardedClips.contains(where: { $0.id == clip.id }))
+        store.deleteArea(area)
+        XCTAssertFalse(store.activeAreas.contains(where: { $0.id == area.id }))
+        XCTAssertTrue(store.discardedAreas.contains(where: { $0.id == area.id }))
+        XCTAssertEqual(canvas.drawing.dataRepresentation(), originalInk,
+                       "Deleting thumbnails and categorization must preserve all Pencil ink")
+
+        store.restoreArea(area)
+        store.restoreClip(clip)
+        XCTAssertTrue(store.activeAreas.contains(where: { $0.id == area.id }))
+        XCTAssertTrue(store.activeClips.contains(where: { $0.id == clip.id }))
+        XCTAssertEqual(canvas.drawing.dataRepresentation(), originalInk)
+        window.isHidden = true
+    }
+
     func testStashShrinksOnCornerApproachWithoutFalseFarAwayHit() {
         let target = CGRect(x: 780, y: 105, width: 150, height: 38)
         let far = CGRect(x: 100, y: 500, width: 120, height: 90)

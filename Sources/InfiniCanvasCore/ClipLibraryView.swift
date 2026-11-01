@@ -14,6 +14,7 @@ struct ClipLibraryView: View {
     @State private var showRenameClip = false
     @State private var showRenameArea = false
     @State private var previewClip: SavedClip?
+    @State private var editingAreaLabels = false
 
     private var filteredClips: [SavedClip] {
         store.activeClips
@@ -196,7 +197,23 @@ struct ClipLibraryView: View {
                             Button { store.goToArea(area); dismiss() } label: {
                                 Label(area.title, systemImage: "mappin.circle")
                             }
+                            .simultaneousGesture(
+                                LongPressGesture(minimumDuration: 0.48).onEnded { _ in
+                                    withAnimation { editingAreaLabels = true }
+                                }
+                            )
                             Spacer()
+                            if editingAreaLabels {
+                                Button(role: .destructive) {
+                                    store.deleteArea(area)
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundStyle(.red)
+                                        .font(.system(size: 19))
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Remove \(area.title) categorization")
+                            }
                             Menu {
                                 Button("Go to area", systemImage: "location") { store.goToArea(area); dismiss() }
                                 Button("Rename", systemImage: "pencil") {
@@ -207,6 +224,10 @@ struct ClipLibraryView: View {
                         }
                     }
                 }
+            }
+            if editingAreaLabels {
+                Button("Done editing labels") { editingAreaLabels = false }
+                    .foregroundStyle(.secondary)
             }
             Section {
                 Text("Organize alphabetizes and groups subject labels here. It never moves your handwriting without an explicit Lasso → Move to area action.")
