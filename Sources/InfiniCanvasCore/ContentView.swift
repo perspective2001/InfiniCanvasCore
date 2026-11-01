@@ -155,6 +155,7 @@ struct ContentView: View {
             }
         }
         .coordinateSpace(name: "infini-canvas-root")
+        .onAppear { configureNativeMorphCaptureIfRequested() }
         .tint(teal)
         .fullScreenCover(isPresented: $showArtStudio) { ArtStudioView() }
         .popover(isPresented: $showDetailedSize) {
@@ -1131,6 +1132,43 @@ struct ContentView: View {
         .animation(.interactiveSpring(response: 0.23, dampingFraction: 0.80),
                    value: visibleSize)
         .accessibilityLabel("Expanding liquid width control: \(String(format: "%.1f", Double(visibleSize))) screen points in selected \(store.tool.rawValue) color at \(Int(store.zoom * 100)) percent zoom")
+    }
+
+    // DEBUG-ONLY: exposes ACTUAL ContentView + native Liquid Glass morph states
+    // to iPad simulator capture. No simulated drawing, no fixture UI replacement.
+    // This is a visual-state harness, NOT a Pencil gesture acceptance test.
+    private func configureNativeMorphCaptureIfRequested() {
+        #if DEBUG
+        let args = ProcessInfo.processInfo.arguments
+        if let value = args.first(where: { $0.hasPrefix("--infini-visual-morph=") }),
+           let percentage = Double(value.split(separator: "=").last ?? "") {
+            let fraction = CGFloat(min(1, max(0, percentage / 100)))
+            store.tool = .pen
+            store.setSelectedScreenNibWidth(2.5 + fraction * 124.5)
+            widthMorphTravel = 20 + fraction * 270
+            widthPanelExpanded = true
+        } else if args.contains("--infini-visual-morph-animation") {
+            Task { @MainActor in
+                store.tool = .pen
+                store.setSelectedScreenNibWidth(2.5)
+                try? await Task.sleep(nanoseconds: 650_000_000)
+                withAnimation(.spring(response: 0.30, dampingFraction: 0.78)) {
+                    widthPanelExpanded = true
+                }
+                for step in 0...30 {
+                    let fraction = CGFloat(step) / 30
+                    widthMorphTravel = 20 + fraction * 270
+                    store.setSelectedScreenNibWidth(2.5 + fraction * 124.5)
+                    try? await Task.sleep(nanoseconds: 45_000_000)
+                }
+                try? await Task.sleep(nanoseconds: 450_000_000)
+                withAnimation(.spring(response: 0.34, dampingFraction: 0.81)) {
+                    widthPanelExpanded = false
+                    widthMorphTravel = 0
+                }
+            }
+        }
+        #endif
     }
 
     private var textNoteCards: some View {
