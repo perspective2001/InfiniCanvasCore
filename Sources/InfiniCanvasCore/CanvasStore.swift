@@ -908,19 +908,30 @@ final class CanvasStore: ObservableObject {
         loading = true
         view.drawing = PKDrawing(strokes: dragRemaining + moved)
         loading = false
-        // The moved ink is committed exactly once. End the old lasso
-        // immediately: it refers to old screen coordinates and previously
-        // caused distant, invisible strokes to remain attached to it.
-        selectedIndices = []
-        selectionActive = false
-        latestClip = nil
+        // Keep selection attached to newly placed strokes, using their
+        // NEW array positions. The Pencil overlay translates its outline by
+        // the same screen delta. This allows immediately moving again or
+        // stashing, without re-lassoing or selecting stale source indices.
+        selectedIndices = Set(dragRemaining.count..<(dragRemaining.count + moved.count))
+        selectionActive = true
+        if let clip = latestClip,
+           let index = clips.firstIndex(where: { $0.id == clip.id }) {
+            if let x = clips[index].sourceX {
+                clips[index].sourceX = x + Double(delta.width / zoom)
+            }
+            if let y = clips[index].sourceY {
+                clips[index].sourceY = y + Double(delta.height / zoom)
+            }
+            latestClip = clips[index]
+            saveIndex()
+        }
         dragOriginal = nil
         dragSelected = []
         dragRemaining = []
         dragBounds = .zero
         isSaved = false
         scheduleSave()
-        status = "Moved ink · circle it again to select at its new position"
+        status = "Ink moved · selection stays active for moving or stashing"
     }
     func cancelSelectionDrag() {
         if let source = dragOriginal, let view = canvas {

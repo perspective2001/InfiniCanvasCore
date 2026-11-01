@@ -269,6 +269,7 @@ final class LassoTouchView: UIView, UIGestureRecognizerDelegate {
                 selectedPreview = nil
                 let target = CGPoint(x: stashDropFrame.midX, y: stashDropFrame.midY)
                 if let thumbnail {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     UIView.animate(withDuration: 0.38, delay: 0,
                                    usingSpringWithDamping: 0.77, initialSpringVelocity: 0.32,
                                    options: [.curveEaseInOut, .allowUserInteraction]) {
@@ -287,9 +288,10 @@ final class LassoTouchView: UIView, UIGestureRecognizerDelegate {
             onFinishMove?(CGSize(width: ending.x - beginning.x, height: ending.y - beginning.y))
             selectedPreview?.removeFromSuperview()
             selectedPreview = nil
-            // A finished move must never leave a stale lasso polygon behind.
-            hasOutline = false
-            points = []
+            // The outline has already moved with the Pencil each frame.
+            // Keep it attached to the *new* stroke location after lift so
+            // another drag can start immediately, including a toolbar drop.
+            hasOutline = true
             onStashProximity?(0)
             redraw()
         } else {

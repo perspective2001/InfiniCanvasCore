@@ -90,22 +90,12 @@ struct ContentView: View {
                         if showTopBar {
                             topChromeGrip
                             header
-                            if !store.stashedClips.isEmpty { clipActionShelf }
                         } else {
                             // Compact mode puts the actual tools almost flush to the top.
                             // The thin transparent grip still accepts a deliberate down swipe.
                             topChromeGrip.frame(height: 10)
                         }
                         toolShelf
-                        if store.tool == .capture && (store.selectionActive || !store.stashedClips.isEmpty) {
-                            HStack {
-                                Spacer(minLength: 0)
-                                stashWell
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 2)
-                            .transition(.move(edge: .top).combined(with: .opacity))
-                        }
                     }
                     Spacer(minLength: 0)
                     if store.tool == .capture && !focusMode { lassoActions }
@@ -128,9 +118,12 @@ struct ContentView: View {
         .overlay(alignment: .topLeading) {
             if widthPanelExpanded && !paperOnly && !focusMode && penSizeFrame != .null {
                 liquidSizeMorph
-                    .frame(width: 84, height: max(18, widthMorphTravel))
+                    // The overlay may become wider than the 84-pt PILL, but
+                    // never changes the pill's position or toolbar layout.
+                    .frame(width: min(500, max(84, visibleSize + 20)),
+                           height: max(9, widthMorphTravel))
                     .position(x: penSizeFrame.midX,
-                              y: penSizeFrame.minY - max(18, widthMorphTravel) / 2 + 5)
+                              y: penSizeFrame.minY - max(9, widthMorphTravel) / 2 + 3)
                     .zIndex(100)
                     .allowsHitTesting(false)
                     .transition(.scale(scale: 0.15, anchor: .bottom).combined(with: .opacity))
@@ -282,7 +275,7 @@ struct ContentView: View {
             // No coloured tab remains visible when the menus are hidden.
             Color.clear.frame(width: 52, height: 6).allowsHitTesting(false)
         }
-        .frame(height: 30)
+        .frame(height: 9)
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
         .onTapGesture {
@@ -394,6 +387,7 @@ struct ContentView: View {
                 .accessibilityHint("Open the separately saved layered Art Studio")
             }
             Spacer(minLength: 4)
+            clipActionShelf
             palmModeButton
             Menu {
                 Button("Overview · 14%", systemImage: "square.dashed") { store.zoomToOverview() }
@@ -531,7 +525,8 @@ struct ContentView: View {
     }
 
     private var toolShelf: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 Button {
                     withAnimation(.spring(response: 0.32, dampingFraction: 0.84)) {
@@ -664,16 +659,22 @@ struct ContentView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 5)
+            }
+            if store.tool == .capture || !store.stashedClips.isEmpty {
+                stashWell
+                    .padding(.trailing, 11)
+            }
         }
+        .frame(height: 59)
         .background(Color(red: 0.964, green: 0.967, blue: 0.962))
         .scrollIndicators(.hidden)
         .simultaneousGesture(
-            DragGesture(minimumDistance: 18).onEnded { value in
-                guard !showTopBar, value.translation.height > 34,
+            DragGesture(minimumDistance: 13).onEnded { value in
+                guard abs(value.translation.height) > 24,
                       abs(value.translation.height) > abs(value.translation.width) * 1.3
                 else { return }
-                withAnimation(.spring(response: 0.27, dampingFraction: 0.8)) {
-                    showTopBar = true
+                withAnimation(.spring(response: 0.26, dampingFraction: 0.78)) {
+                    showTopBar = value.translation.height > 0
                 }
             }
         )
@@ -723,12 +724,12 @@ struct ContentView: View {
                 }
             }
             if store.stashedClips.isEmpty {
-                Text("Drop lasso here")
+                Text("Drop ink")
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(.secondary)
             }
         }
-        .frame(minWidth: 140, minHeight: 35)
+        .frame(minWidth: 134, minHeight: 44)
         .padding(.horizontal, 10)
         .background(.thinMaterial, in: Capsule())
         .overlay(Capsule().stroke(teal.opacity(0.16 + stashProximity * 0.54),
@@ -744,22 +745,32 @@ struct ContentView: View {
             }
         }
         .onPreferenceChange(StashDropFramePreferenceKey.self) { stashDropFrame = $0 }
+        .simultaneousGesture(TapGesture().onEnded {
+            // Deliberate accessibility fallback for physical iPad variations
+            // in Pencil touch routing. This does not replace drag-to-tray.
+            if store.selectionActive { _ = store.stashSelectedInk() }
+        })
+        .accessibilityHint("Drag selected handwriting here, or tap to stash the active lasso")
         .animation(.spring(response: 0.3, dampingFraction: 0.77), value: store.stashedClipIDs.count)
     }
 
+    // Destination targets belong in the FIRST (logo + RestSafe) command bar.
+    // They stay fixed there; the receiving strip belongs in the SECOND row.
     private var clipActionShelf: some View {
-        HStack(spacing: 9) {
+        HStack(spacing: 5) {
             ForEach(ClipDropAction.allCases, id: \.self) { action in
                 Label(action.rawValue, systemImage: action.icon)
-                    .font(.caption2.weight(.semibold))
+                    .font(.system(size: 11, weight: .medium))
+                    .lineLimit(1)
                     .foregroundStyle(highlightedDrop == action ? .white : teal)
-                    .padding(.horizontal, 9)
-                    .frame(height: 34)
-                    .background(highlightedDrop == action ? teal : teal.opacity(0.035),
-                                in: RoundedRectangle(cornerRadius: 14))
+                    .padding(.horizontal, 7)
+                    .frame(height: 37)
+                    .background(highlightedDrop == action
+                                ? teal.opacity(0.88) : .white.opacity(0.26),
+                                in: RoundedRectangle(cornerRadius: 10))
                     .overlay {
-                        RoundedRectangle(cornerRadius: 14)
-                            .stroke(.white.opacity(0.46), lineWidth: 0.7)
+                        RoundedRectangle(cornerRadius: 10)
+                            .strokeBorder(.white.opacity(0.38), lineWidth: 0.8)
                             .allowsHitTesting(false)
                     }
                     .background {
@@ -773,15 +784,16 @@ struct ContentView: View {
                         return handleClipDrop(id, action: action)
                     }
                     .onTapGesture {
+                        // Finger tap on Organize jumps there; dragging ink onto it adds.
                         if action == .organize { store.openSpatialOrganizer() }
                     }
+                    .accessibilityLabel(action == .organize
+                                        ? "Organize: tap to navigate, drop a clip to store"
+                                        : "Drop a stashed handwriting clip into \(action.rawValue)")
             }
-            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 2)
+        .fixedSize(horizontal: true, vertical: false)
         .onPreferenceChange(ClipActionFramePreferenceKey.self) { clipTargetFrames = $0 }
-        .transition(.move(edge: .top).combined(with: .opacity))
     }
 
     private func handleClipDrop(_ id: UUID, action: ClipDropAction) -> Bool {
@@ -908,7 +920,7 @@ struct ContentView: View {
                     }
                 }
                 let upward = max(0, -value.translation.height)
-                widthMorphTravel = min(235, upward)
+                widthMorphTravel = min(300, upward)
                 let limits = activeSizeLimits
                 let current = widthDragStart ?? activeSize
                 let initialFraction = log(max(limits.lowerBound, current) / limits.lowerBound)
@@ -925,24 +937,26 @@ struct ContentView: View {
             })
     }
 
-    // A *pressure-like stroke*, not a uniformly sized rectangular bar:
-    // slender at its rooted bottom, broadens into a soft rounded tip above.
+    // The width isn't a mushroom-shaped cap or uniformly stretched capsule.
+    // The *same ink stroke* rises with the gesture and gains width progressively
+    // along its length (like Apple Pencil pressure), without moving the base.
     private var liquidSizeMorph: some View {
-        let thickness = min(70, max(3, visibleSize))
-        return LiquidPressureStroke(tipWidth: thickness)
-            .fill(LinearGradient(colors: [
-                teal.opacity(0.84), Color(red: 0.26, green: 0.73, blue: 0.70).opacity(0.91),
-                teal.opacity(0.96)
+        let visualThickness = max(1.0, visibleSize)
+        return LiquidPressureStroke(tipWidth: visualThickness)
+            .fill(LinearGradient(stops: [
+                .init(color: teal.opacity(0.68), location: 0),
+                .init(color: Color(red: 0.18, green: 0.64, blue: 0.65), location: 0.53),
+                .init(color: teal.opacity(0.94), location: 1)
             ], startPoint: .bottom, endPoint: .top))
-            .overlay(alignment: .leading) {
-                LiquidPressureStroke(tipWidth: thickness)
-                    .stroke(.white.opacity(0.28), lineWidth: 1.1)
+            .overlay {
+                LiquidPressureStroke(tipWidth: visualThickness)
+                    .stroke(.white.opacity(0.28), lineWidth: 0.7)
                     .allowsHitTesting(false)
             }
-            .shadow(color: teal.opacity(0.20), radius: 7, y: -2)
-            .animation(.interactiveSpring(response: 0.18, dampingFraction: 0.86),
-                       value: thickness)
-            .accessibilityLabel("Actual base width \(String(format: "%.1f", Double(activeSize))) points; \(String(format: "%.1f", Double(visibleSize))) screen points at current zoom")
+            .shadow(color: teal.opacity(0.15), radius: 5, y: -1)
+            .animation(.interactiveSpring(response: 0.15, dampingFraction: 0.9),
+                       value: visualThickness)
+            .accessibilityLabel("Selected base width \(String(format: "%.1f", Double(activeSize))) points at \(String(format: "%.0f", Double(store.zoom * 100))) percent zoom")
     }
 
     private var textNoteCards: some View {
@@ -1123,7 +1137,7 @@ struct ChatDestinationView: View {
                 }
                 Section("Highlighter and interface") {
                     Toggle("Fixed vertical highlighter nib", isOn: $store.fixedHighlighter)
-                    Text("Swipe up on the top grip to hide the command bar, down to restore it. Tap or double-tap the right edge for a clean paper-only view. Swipe up from the width icon to open a vertical pen-size control; keep dragging to change thickness, then swipe down or tap Done.")
+                    Text("Swipe up on the command bar or drawing tools to tuck away the upper bar; swipe down on the remaining tools to restore it. Double tap the right edge for paper-only. Drag upward on the width pill to preview a variable-width stroke; lift to finish, or tap for detailed sizing.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Canvas") {
@@ -1255,32 +1269,50 @@ private struct ClipActionFramePreferenceKey: PreferenceKey {
     }
 }
 
+// Continuously tapered *line*, rather than a bulb or teardrop icon:
+// width is smallest at the original control and increases continuously
+// in the direction of upward drag. The uppermost tip is softly rounded.
 private struct LiquidPressureStroke: Shape {
     var tipWidth: CGFloat
     var animatableData: CGFloat {
         get { tipWidth }
         set { tipWidth = newValue }
     }
+
     func path(in rect: CGRect) -> Path {
-        let cx = rect.midX
-        let bottom = rect.maxY
-        let top = rect.minY + 1
-        let half = min(rect.width / 2 - 2, max(1.5, tipWidth / 2))
-        let lowerHalf: CGFloat = 2.5
-        var p = Path()
-        p.move(to: CGPoint(x: cx - lowerHalf, y: bottom))
-        p.addCurve(to: CGPoint(x: cx - half, y: top + half / 2),
-                   control1: CGPoint(x: cx - lowerHalf, y: rect.midY),
-                   control2: CGPoint(x: cx - half, y: top + rect.height * 0.28))
-        p.addArc(center: CGPoint(x: cx, y: top + half / 2),
-                 radius: half, startAngle: .degrees(180),
-                 endAngle: .degrees(0), clockwise: false)
-        p.addCurve(to: CGPoint(x: cx + lowerHalf, y: bottom),
-                   control1: CGPoint(x: cx + half, y: top + rect.height * 0.28),
-                   control2: CGPoint(x: cx + lowerHalf, y: rect.midY))
-        p.addQuadCurve(to: CGPoint(x: cx - lowerHalf, y: bottom),
-                       control: CGPoint(x: cx, y: bottom + 3))
-        p.closeSubpath()
-        return p
+        guard rect.height > 1, rect.width > 2 else { return Path() }
+        let center = rect.midX
+        let maxHalfWidth = min(rect.width / 2 - 1, max(0.9, tipWidth / 2))
+        let steps = max(10, min(72, Int(rect.height / 3)))
+        let tipRound = min(5, rect.height * 0.12)
+        let activeLength = max(0.1, rect.height - tipRound)
+
+        func halfWidth(at fraction: CGFloat) -> CGFloat {
+            // A continuously increasing local thickness like pressure
+            // accumulation, not uniform scaling of a capsule.
+            let tapered = pow(max(0, min(1, fraction)), 1.75)
+            return 1.25 + (maxHalfWidth - 1.25) * tapered
+        }
+
+        var outline = Path()
+        outline.move(to: CGPoint(x: center - 1.25, y: rect.maxY))
+        for i in 1...steps {
+            let progress = CGFloat(i) / CGFloat(steps)
+            let y = rect.maxY - progress * activeLength
+            outline.addLine(to: CGPoint(x: center - halfWidth(at: progress), y: y))
+        }
+        // Only round the very end of the stroke; no enormous mushroom bulb.
+        let topY = rect.minY
+        outline.addQuadCurve(to: CGPoint(x: center + maxHalfWidth, y: rect.minY + tipRound),
+                             control: CGPoint(x: center, y: topY - 1))
+        for i in (0..<steps).reversed() {
+            let progress = CGFloat(i) / CGFloat(steps)
+            let y = rect.maxY - progress * activeLength
+            outline.addLine(to: CGPoint(x: center + halfWidth(at: progress), y: y))
+        }
+        outline.addQuadCurve(to: CGPoint(x: center - 1.25, y: rect.maxY),
+                             control: CGPoint(x: center, y: rect.maxY + 1))
+        outline.closeSubpath()
+        return outline
     }
 }
