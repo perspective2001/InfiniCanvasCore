@@ -45,6 +45,8 @@ struct ContentView: View {
     @State private var showTopBar = true
     @State private var paperOnly = false
     @State private var showFocusChoices = false
+    @State private var editingAreaLabels = false
+    @State private var editingMiniClips = false
 
     private let teal = Color(red: 0.07, green: 0.40, blue: 0.43)
     private let swatches: [(String, UIColor)] = [
@@ -93,7 +95,7 @@ struct ContentView: View {
                         } else {
                             // Compact mode puts the actual tools almost flush to the top.
                             // The thin transparent grip still accepts a deliberate down swipe.
-                            topChromeGrip.frame(height: 10)
+                            topChromeGrip
                         }
                         toolShelf
                     }
@@ -266,6 +268,16 @@ struct ContentView: View {
         .accessibilityHint("Requires a deliberate tap; hidden in paper-only mode")
     }
 
+    private func handleHeaderVerticalSwipe(_ drag: DragGesture.Value) {
+        let dy = drag.translation.height
+        guard abs(dy) > 23, abs(dy) > abs(drag.translation.width) * 1.22 else { return }
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.81)) {
+            paperOnly = false
+            if dy > 0 { focusMode = false }
+            showTopBar = dy > 0
+        }
+    }
+
     // Always-present top handle. Swipe UP to tuck the header away, DOWN to reveal.
     // Tapping it also toggles the header, providing a reliable fallback if a swipe
     // is intercepted by iPadOS or Swift Playgrounds.
@@ -275,7 +287,8 @@ struct ContentView: View {
             // No coloured tab remains visible when the menus are hidden.
             Color.clear.frame(width: 52, height: 6).allowsHitTesting(false)
         }
-        .frame(height: 9)
+        // Invisible but generous touch surface, unlike the old 9pt grip.
+        .frame(height: showTopBar ? 19 : 22)
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
         .onTapGesture {
@@ -290,21 +303,7 @@ struct ContentView: View {
             }
         }
         .highPriorityGesture(
-            DragGesture(minimumDistance: 12)
-                .onEnded { value in
-                    let dy = value.translation.height
-                    guard abs(dy) > 22 && abs(dy) > abs(value.translation.width) * 1.2 else { return }
-                    withAnimation(.easeInOut(duration: 0.20)) {
-                        if dy > 0 {
-                            paperOnly = false
-                            focusMode = false
-                            showTopBar = true
-                        } else {
-                            paperOnly = false
-                            showTopBar = false
-                        }
-                    }
-                }
+            DragGesture(minimumDistance: 11).onEnded(handleHeaderVerticalSwipe)
         )
         .background(Color.clear)
         .accessibilityLabel("Top controls grip")
@@ -389,18 +388,7 @@ struct ContentView: View {
             Spacer(minLength: 4)
             clipActionShelf
             palmModeButton
-            Menu {
-                Button("Overview · 14%", systemImage: "square.dashed") { store.zoomToOverview() }
-                Button("Writing · 100%", systemImage: "pencil") { store.zoomToWriting() }
-                Button("Zoom out further", systemImage: "minus.magnifyingglass") { store.zoomBy(0.4) }
-                Button("Zoom in", systemImage: "plus.magnifyingglass") { store.zoomBy(2.5) }
-                Button("Exact 1000% zoom · native maximum", systemImage: "plus.viewfinder") { store.zoomTo(10) }
-            } label: {
-                Image(systemName: "square.dashed.inset.filled")
-                    .frame(width: 36, height: 40)
-            }
-            .buttonStyle(.borderless)
-            .accessibilityLabel("Zoom to overview")
+            trashMenu
             Button { showLibrary = true } label: {
                 Image(systemName: "square.stack.3d.up")
                     .frame(width: 36, height: 40)
@@ -423,22 +411,86 @@ struct ContentView: View {
         .padding(.horizontal, 13)
         .padding(.vertical, 7)
         .background(.regularMaterial)
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 18)
-                .onEnded { value in
-                    guard value.translation.height < -34,
-                          abs(value.translation.height) > abs(value.translation.width) * 1.3
-                    else { return }
-                    withAnimation(.spring(response: 0.27, dampingFraction: 0.8)) {
-                        showTopBar = false
+        // High priority on the *actual header*, not only a tiny invisible
+        // strip. Taps still trigger buttons because the recognizer requires
+        // a deliberate drag. Both finger and Pencil can begin the swipe here.
+        .highPriorityGesture(
+            DragGesture(minimumDistance: 13)
+                .onEnded(handleHeaderVerticalSwipe)
+        )
+    }
+
+    // Soft-delete management, including offscreen labels such as "LING".
+    // Nothing here deletes PencilKit ink; all entries remain recoverable.
+    private var trashMenu: some View {
+        Menu {
+            if editingAreaLabels || editingMiniClips {
+                Button("Finish editing", systemImage: "checkmark") {
+                    editingAreaLabels = false
+                    editingMiniClips = false
+                }
+            }
+            Button("Show × on canvas categories", systemImage: "rectangle.badge.xmark") {
+                editingAreaLabels = true
+            }
+            Button("Show × on saved thumbnails", systemImage: "rectangle.stack.badge.minus") {
+                editingMiniClips = true
+            }
+            Menu("Remove canvas categorization", systemImage: "mappin.slash") {
+                let labeled = store.areas.filter { $0.isTrashed != true }
+                if labeled.isEmpty { Text("No area labels") }
+                ForEach(labeled) { area in
+                    Button(role: .destructive) { store.deleteArea(area) } label: {
+                        Label(area.title, systemImage: "xmark.circle")
                     }
                 }
-        )
+            }
+            Menu("Trash saved handwriting thumbnails", systemImage: "photo.stack") {
+                if store.stashedClips.isEmpty && store.spatialOrganizerClips.isEmpty {
+                    Text("No saved toolbar or organizer thumbnails")
+                }
+                ForEach(store.stashedClips) { clip in
+                    Button(role: .destructive) { store.deleteClip(clip) } label: {
+                        Label("Toolbar · \(clip.title)", systemImage: "trash")
+                    }
+                }
+                ForEach(store.spatialOrganizerClips.filter {
+                    clip in !store.stashedClipIDs.contains(clip.id)
+                }) { clip in
+                    Button(role: .destructive) { store.deleteClip(clip) } label: {
+                        Label("Organizer · \(clip.title)", systemImage: "trash")
+                    }
+                }
+            }
+            if !store.discardedAreas.isEmpty || !store.discardedClips.isEmpty {
+                Menu("Restore from Trash", systemImage: "arrow.uturn.backward") {
+                    ForEach(store.discardedAreas) { area in
+                        Button("Restore label · \(area.title)") { store.restoreArea(area) }
+                    }
+                    ForEach(store.discardedClips) { clip in
+                        Button("Restore clip · \(clip.title)") { store.restoreClip(clip) }
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "trash")
+                .font(.system(size: 17, weight: .regular))
+                .frame(width: 34, height: 40)
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel("Trash, remove categories and edit saved thumbnails")
     }
 
     // Uncommon actions belong in menus, not between the Pencil and undo controls.
     private var moreMenu: some View {
         Menu {
+            Menu("Zoom", systemImage: "magnifyingglass") {
+                Button("Overview · 14%", systemImage: "square.dashed") { store.zoomToOverview() }
+                Button("Writing · 100%", systemImage: "pencil") { store.zoomToWriting() }
+                Button("Zoom out further", systemImage: "minus.magnifyingglass") { store.zoomBy(0.4) }
+                Button("Zoom in", systemImage: "plus.magnifyingglass") { store.zoomBy(2.5) }
+                Button("Exact 1000% zoom", systemImage: "plus.viewfinder") { store.zoomTo(10) }
+            }
             Button("Auto-label nearby handwriting", systemImage: "text.magnifyingglass") { store.autoNameAndAddArea() }
             Button("Manually name area", systemImage: "mappin.and.ellipse") { showAddArea = true }
             Menu("Isolate one area", systemImage: "eye") {
