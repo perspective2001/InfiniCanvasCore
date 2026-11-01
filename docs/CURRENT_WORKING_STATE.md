@@ -1,6 +1,13 @@
 # CURRENT WORKING STATE — InfiniCanvas
 *Always read this one page before an InfiniCanvas edit; update only when a decision or verified state changes. Last updated 2026-11-01.*
 
+## Nov 1 follow-up: active work, not an approved release
+- **Actual pixels retrieved in a fresh chat:** run [41328989188](https://github.com/perspective2001/InfiniCanvasCore/actions/runs/41328989188), artifact ID 13092941083, yielded a real 2064×2752 native simulator PNG. Re-downloaded and visually opened; shows the real resting toolbars (width pill 2.5) and blank canvas, *not* a morph or handwriting proof.
+- **Draft [PR #23](https://github.com/perspective2001/InfiniCanvasCore/pull/23):** raises boot readiness from 55s to 150s, preserves screenshot-failure diagnostics. A subsequent main run failed at the 55s boot cap *after* successful compilation/tests. Keep this PR pending until its exact-SHA screenshot run succeeds.
+- **Draft [PR #25](https://github.com/perspective2001/InfiniCanvasCore/pull/25):** cleanly based on current main, contains previously rejected PR #18 experimental SwiftUI morph and a DEBUG-only native capture harness. Its iPad simulator should capture 25%, 60%, 100% width states and state-driven video; these artifacts must be opened and critiqued before improving shape. Expected width regression failures remain release blockers; the capture step may run despite red tests to collect diagnosis. #24 was closed due to stale-base merge conflicts.
+- **Never install or merge experimental #25 as-is.** Its incorrect shape and physically clamped pen widths are known defects. Honor exact-user-sized on-screen nib requirement across zoom, including pressure behaviour; if native PencilKit cannot support a chosen width, don't display it as if it did. Test or design a distinct renderer, not an unverified claim.
+- **Resume efficiently:** read this file, AGENTS, and the owner implementation. Check PR #23/#25 and GitHub Actions latest runs. Do not reread the long chat or edit accepted toolbar layout. State evidence as source-change / compilation / native PNG inspected / native movie inspected / physical Pencil approved, separately.
+
 ## Current reality — never infer from a former chat
 - **Production branch:** `main`. Do not treat the most recent commit, green compilation, or latest IPA as a known-good device build. `docs/KNOWN_BASELINE.md` records the device baseline.
 - **Experimental drawing work:** Draft [PR #18](https://github.com/perspective2001/InfiniCanvasCore/pull/18) remains **REJECTED and unmerged**. User's real screenshot showed huge `127pt` morph preview with a hairline stroke at 10.2% zoom, and a bad box/funnel instead of a Siri-like morph. The simulator width tests also failed. Don't release it as accurate.
