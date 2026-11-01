@@ -183,20 +183,22 @@ final class CanvasCoreTests: XCTestCase {
 
     func testNominalToolWidthMatchesActualPencilKitConfiguration() {
         let store = CanvasStore()
-        store.strokeWidth = 8
         store.tool = .pen
+        store.setSelectedScreenNibWidth(8)
         XCTAssertEqual(store.nominalToolWidth, 8)
         store.tool = .pencil
+        store.setSelectedScreenNibWidth(8)
         XCTAssertEqual(store.nominalToolWidth, 8)
         store.tool = .marker
         store.fixedHighlighter = false
+        store.setSelectedScreenNibWidth(32)
         XCTAssertEqual(store.nominalToolWidth, 32,
-                       "Preview must include native marker's 4× actual nib width")
+                       "Preview matches native marker nib after applying its 4× width multiplier")
         store.fixedHighlighter = true
         XCTAssertEqual(store.nominalToolWidth, store.markerWidth,
                        "Fixed vertical highlighter uses its own nib geometry")
         store.tool = .eraser
-        store.eraserWidth = 46
+        store.setSelectedScreenNibWidth(46)
         XCTAssertEqual(store.nominalToolWidth, 46)
     }
 
@@ -247,7 +249,7 @@ final class CanvasCoreTests: XCTestCase {
         XCTAssertEqual(LassoTouchView.proximity(of: overlapping, to: .null), 0)
     }
 
-    func testBaseToolWidthIsPreservedAcrossZoomChanges() throws {
+    func testSelectedScreenWidthRemainsStableAtAllZoomLevels() throws {
         let store = CanvasStore()
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
         let canvas = PKCanvasView(frame: window.bounds)
@@ -259,12 +261,45 @@ final class CanvasCoreTests: XCTestCase {
         window.layoutIfNeeded()
         store.attach(canvas)
         store.tool = .pen
-        store.strokeWidth = 45
-        for zoom: CGFloat in [0.25, 0.5, 1, 2, 5] {
+        store.setSelectedScreenNibWidth(20)
+        for zoom: CGFloat in [0.5, 1, 2, 5] {
             store.zoomTo(zoom)
-            XCTAssertEqual(store.strokeWidth, 45,
-                           "Changing zoom must never silently overwrite the user's base pen width")
             XCTAssertEqual(store.zoom, zoom, accuracy: 0.02)
+            XCTAssertEqual(store.selectedScreenNibWidth, 20, accuracy: 0.02)
+            XCTAssertEqual(store.strokeWidth, 20 / zoom, accuracy: 0.03,
+                           "Draw 40 canvas pt at 50% zoom, 10 at 200%, for the same 20 screen pt")
+            XCTAssertEqual(store.nominalToolWidth * store.zoom, 20, accuracy: 0.04)
+        }
+        // Existing content remains untouched by changing drawing tool size.
+        let original = PKDrawing(strokes: [makeStroke(.pen, x: 240, y: 300)])
+        canvas.drawing = original
+        store.zoomTo(2)
+        XCTAssertEqual(canvas.drawing.dataRepresentation(), original.dataRepresentation())
+        window.isHidden = true
+    }
+
+    func testMarkerPenPencilAndEraserNibScreenSizeAtZoom() throws {
+        let store = CanvasStore()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
+        let canvas = PKCanvasView(frame: window.bounds)
+        canvas.minimumZoomScale = 0.045
+        canvas.maximumZoomScale = 10
+        canvas.contentSize = CGSize(width: 12000, height: 12000)
+        window.addSubview(canvas)
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+        store.attach(canvas)
+
+        for tool: CanvasTool in [.pen, .pencil, .marker, .eraser] {
+            store.tool = tool
+            if tool == .marker { store.fixedHighlighter = false }
+            store.setSelectedScreenNibWidth(12)
+            for zoom: CGFloat in [0.5, 1, 2] {
+                store.zoomTo(zoom)
+                XCTAssertEqual(store.selectedScreenNibWidth, 12, accuracy: 0.05)
+                XCTAssertEqual(store.nominalToolWidth * store.zoom, 12, accuracy: 0.05,
+                               "Tool \(tool.rawValue) at zoom \(zoom)")
+            }
         }
         window.isHidden = true
     }
