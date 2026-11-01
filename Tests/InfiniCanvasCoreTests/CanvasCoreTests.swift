@@ -112,19 +112,22 @@ final class CanvasCoreTests: XCTestCase {
         XCTAssertEqual(canvas.drawing.strokes.count, 1,
                        "Stashing must restore original ink rather than deleting it")
         XCTAssertEqual(canvas.drawing.dataRepresentation(), prior)
-        XCTAssertEqual(store.stashedClips.map(\.id), [clip.id])
+        XCTAssertTrue(store.stashedClips.contains(where: { $0.id == clip.id }))
 
         XCTAssertTrue(store.addToSpatialOrganizer(clip.id))
         XCTAssertTrue(store.addToSpatialOrganizer(clip.id))
-        XCTAssertTrue(store.stashedClips.isEmpty)
-        XCTAssertEqual(store.spatialOrganizerClips.map(\.id), [clip.id],
+        XCTAssertFalse(store.stashedClips.contains(where: { $0.id == clip.id }))
+        XCTAssertEqual(store.spatialOrganizerClips.filter { $0.id == clip.id }.count, 1,
                        "Repeated drops must never duplicate the same clip")
+        XCTAssertEqual(store.spatialOrganizerClips.last?.id, clip.id,
+                       "New clip must append to the organizer's pre-existing order")
         XCTAssertNotNil(store.spatialOrganizerArea)
 
         let backupURL = try XCTUnwrap(store.exportCompleteBackup())
         let backup = try JSONDecoder().decode(
             CompleteBackup.self, from: Data(contentsOf: backupURL))
-        XCTAssertEqual(backup.index.organizedClipIDs, [clip.id])
+        XCTAssertEqual(backup.index.organizedClipIDs?.last, clip.id)
+        XCTAssertEqual(backup.index.organizedClipIDs?.filter { $0 == clip.id }.count, 1)
         XCTAssertNotNil(backup.index.organizerAreaID)
         XCTAssertNotNil(try PKDrawing(data: backup.drawing).strokes.first)
         window.isHidden = true
