@@ -41,6 +41,7 @@ struct ContentView: View {
     @State private var highlightedDrop: ClipDropAction? = nil
     @State private var clipTabFrames: [UUID: CGRect] = [:]
     @State private var dragNearTrash = false
+    @State private var trashDropFrame: CGRect = .null
     @State private var showEraserOptions = false
     @State private var showHighlighterOptions = false
     @State private var showArtStudio = false
@@ -488,9 +489,21 @@ struct ContentView: View {
         } label: {
             Image(systemName: "trash")
                 .font(.system(size: 17, weight: .regular))
+                .foregroundStyle(dragNearTrash ? .red : .primary)
+                .scaleEffect(dragNearTrash ? 1.14 : 1.0)
                 .frame(width: 34, height: 40)
+                .animation(.spring(response: 0.2, dampingFraction: 0.65),
+                           value: dragNearTrash)
         }
         .buttonStyle(.borderless)
+        .background {
+            GeometryReader { geo in
+                Color.clear.preference(key: TrashDropFramePreferenceKey.self,
+                    value: geo.frame(in: .named("infini-canvas-root")))
+            }
+        }
+        .onPreferenceChange(TrashDropFramePreferenceKey.self) { trashDropFrame = $0 }
+        .hoverEffect(.highlight)
         .accessibilityLabel("Trash, remove categories and edit saved thumbnails")
     }
 
@@ -791,9 +804,15 @@ struct ContentView: View {
                                         $0.value.insetBy(dx: -16, dy: -12)
                                             .contains(value.location)
                                     })?.key
+                                    dragNearTrash = trashDropFrame
+                                        .insetBy(dx: -17, dy: -15)
+                                        .contains(value.location)
                                 }
                                 .onEnded { value in
-                                    if let action = clipTargetFrames.first(where: {
+                                    if trashDropFrame.insetBy(dx: -17, dy: -15)
+                                        .contains(value.location) {
+                                        store.deleteClip(clip)
+                                    } else if let action = clipTargetFrames.first(where: {
                                         $0.value.insetBy(dx: -16, dy: -12)
                                             .contains(value.location)
                                     })?.key {
@@ -810,6 +829,7 @@ struct ContentView: View {
                                         activeMiniDrag = nil
                                         miniDragPoint = nil
                                         highlightedDrop = nil
+                                        dragNearTrash = false
                                     }
                                 }
                         )
@@ -1446,6 +1466,14 @@ private struct PenSizeFramePreferenceKey: PreferenceKey {
     static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
         let frame = nextValue()
         if frame != .null { value = frame }
+    }
+}
+
+private struct TrashDropFramePreferenceKey: PreferenceKey {
+    static var defaultValue: CGRect = .null
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let rect = nextValue()
+        if !rect.isNull { value = rect }
     }
 }
 
