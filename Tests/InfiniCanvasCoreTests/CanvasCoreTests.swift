@@ -219,7 +219,11 @@ final class CanvasCoreTests: XCTestCase {
             store.cancelSelectionDrag()
             XCTAssertEqual(canvas.drawing.strokes.count, 1)
             XCTAssertTrue(store.selectionActive)
-            store.clearSelection()
+            XCTAssertTrue(store.stashSelectedInk(),
+                          "Moved selection must still be stasheable without a new lasso")
+            XCTAssertEqual(canvas.drawing.strokes.count, 1,
+                           "Stashing moved ink must not delete the drawing")
+            XCTAssertFalse(store.selectionActive)
             store.captureLasso(outline(CGPoint(x: moved.midX, y: moved.midY)), from: overlay)
             XCTAssertTrue(store.selectionActive,
                           "Moved handwriting must be selectable at its NEW location")
