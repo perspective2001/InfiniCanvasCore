@@ -9,6 +9,16 @@ Read this before editing or releasing. These rules are persistent repository ins
 - Protect all user ink, clips, lecture files and Art Studio data. Never delete documents, alter bundle ID, migrate on-disk schema or create a replacement app without explicit review and rollback.
 - Regressions in handwriting latency, pen/eraser/lasso, palm interaction, zoom anchor, saving, menus and launch are release blockers.
 
+## Enforced device-acceptance protocol (2026-11-01)
+
+- For PRs changing native `Sources/InfiniCanvasCore/*.swift`, the `Device-accepted for UI changes` check remains red until the user has actually tested the **same SHA** on their iPad, explicitly confirmed the interaction, and the PR has `device-accepted` plus `Device-tested SHA: <head SHA>` in its description. **Never self-apply an approval based on a simulator test or inferred consent.**
+- Branch preview IPAs are experiments, not approved builds. Their downloaded artifact includes `InfiniCanvas-BUILD-INFO.txt` with source SHA and test/approval limitations. Keep rejected drafts unmerged.
+- Before proposing a sizing fix, compare the UI preview to the **actual width accepted by `PKInkingTool`**, including each ink type's `validWidthRange`. Test at 10.2% zoom and normal zoom. Pressure and tilt must remain supported.
+- The native bubble's appearance needs an actual simulator/iPad recording and user review, not an HTML mock. Never claim a stylized custom shape is Siri's native morph.
+- **GitHub repository ruleset must require this status check and the Apple SDK checks on `main`** to make the gate technically non-bypassable. Without ruleset configuration, a failed check is visible but not guaranteed to prevent all merges.
+
+See [November 1 failure audit](docs/ROOT_CAUSE_AUDIT_2026-11-01.md).
+
 ## Mandatory development loop
 1. Retrieve current repository state and read affected source, the host fixture and [baseline](docs/KNOWN_BASELINE.md). Do not infer from a prior summary.
 2. Write one observable acceptance criterion and a failing **targeted** regression test when practical; don't confuse a mocked view with a physically operated Apple Pencil.
