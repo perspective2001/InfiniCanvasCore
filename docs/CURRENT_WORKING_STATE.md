@@ -20,7 +20,7 @@
 1. **Read only** this page + `AGENTS.md` and files that OWN the requested behaviour. Identify exact baseline, source commit, and what stays untouched.
 2. **Contract:** record one before/after and the negative case. Before touching code, identify visual reference and a *native* scene/state to inspect. No re-implementation of adjacent good components.
 3. **Modify just one subsystem** on a named branch. Run cheap preflight and focused geometry/API tests.
-4. **Real visual evidence:** use the *existing host build* with simulator screenshot artifact `InfiniCanvas-Native-Visual-<SHA>`. For animation/gestures use deterministic real-app state capture/XCUITest or a branch IPA with Pencil hardware; don't approve from an HTML mock, simulated screenshot of a different component, or a description of code.
+4. **Real visual evidence:** use the already-running iPad SDK job, which builds the CI host and uploads simulator screenshot artifact `InfiniCanvas-Native-Visual-<SHA>`. For animation/gestures use deterministic real-app state capture/XCUITest or a branch IPA with Pencil hardware; don't approve from an HTML mock, simulated screenshot of a different component, or a description of code.
 5. **Audit:** compare *actual screenshot/movie* to user's reference and to previous accepted appearance; inspect logs plus exact-source SHA; fix failures before asking user. Request explicit on-device review only when simulator visuals and relevant tests are good. Merge only after device approval per check gate.
 
 ## Evidence vocabulary
