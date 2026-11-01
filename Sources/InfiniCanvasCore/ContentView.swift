@@ -990,34 +990,32 @@ struct ContentView: View {
         }
     }
 
-    private var activeSize: CGFloat {
-        store.tool == .eraser ? store.eraserWidth : store.strokeWidth
-    }
+    // UI works in apparent ON-SCREEN points, independent of canvas zoom.
+    private var activeSize: CGFloat { store.selectedScreenNibWidth }
     private var activeSizeLimits: ClosedRange<CGFloat> {
         if store.tool == .eraser { return 3...100 }
         return 0.4...(store.mode == .art ? 240 : 160)
     }
     private func applySize(_ requested: CGFloat) {
         let range = activeSizeLimits
-        let value = min(range.upperBound, max(range.lowerBound, requested))
-        if store.tool == .eraser { store.eraserWidth = value }
-        else { store.strokeWidth = value }
+        store.setSelectedScreenNibWidth(
+            min(range.upperBound, max(range.lowerBound, requested)))
     }
-    // Effective screen size is specified in *points*, not device pixels.
-    private var visibleSize: CGFloat { store.nominalToolWidth * store.zoom }
+    // Preview and the next nominal stroke use the same apparent width.
+    private var visibleSize: CGFloat { store.selectedScreenNibWidth }
 
     private var detailedSizePanel: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(store.tool == .eraser ? "Eraser size" : "Pencil / pen size")
                 .font(.headline)
-            Text(String(format: "Selected %.1f pt · actual nominal nib %.1f pt · at %.0f%% zoom: %.1f screen pt",
-                Double(activeSize), Double(store.nominalToolWidth),
-                Double(store.zoom * 100), Double(visibleSize)))
+            Text(String(format: "Preview %.1f screen pt · underlying nib %.1f canvas pt at %.0f%% zoom",
+                Double(visibleSize), Double(store.nominalToolWidth),
+                Double(store.zoom * 100)))
                 .font(.caption.monospacedDigit())
             Slider(value: Binding(get: { Double(activeSize) },
                                   set: { applySize(CGFloat($0)) }),
                    in: Double(activeSizeLimits.lowerBound)...Double(activeSizeLimits.upperBound))
-            Text("PencilKit's pressure and tilt may change a stroke's actual edge. The selected base width remains unchanged when you zoom.")
+            Text("The next stroke keeps the selected apparent width at any zoom. Existing ink scales naturally. Native PencilKit pressure and tilt can vary the exact edge of expressive brushes.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .padding(18)
@@ -1047,7 +1045,7 @@ struct ContentView: View {
         }
         .onPreferenceChange(PenSizeFramePreferenceKey.self) { penSizeFrame = $0 }
         .hoverEffect(.lift)
-        .accessibilityLabel("Base size \(String(format: "%.1f", Double(activeSize))) points")
+        .accessibilityLabel("On-screen size \(String(format: "%.1f", Double(activeSize))) points")
         .accessibilityHint("Swipe up to resize with the liquid stroke, lift to collapse; tap for details")
         .highPriorityGesture(DragGesture(minimumDistance: 7)
             .onChanged { value in
@@ -1106,7 +1104,7 @@ struct ContentView: View {
                 Image(systemName: store.tool.symbol)
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(selectedInk)
-                Text(String(format: "%.1f pt", Double(store.nominalToolWidth)))
+                Text(String(format: "%.1f pt", Double(visibleSize)))
                     .font(.system(size: 10, weight: .semibold).monospacedDigit())
                     .foregroundStyle(selectedInk)
                 GeometryReader { geo in
@@ -1132,7 +1130,7 @@ struct ContentView: View {
         }
         .animation(.interactiveSpring(response: 0.23, dampingFraction: 0.80),
                    value: visibleSize)
-        .accessibilityLabel("Expanding liquid width control: \(String(format: "%.1f", Double(store.nominalToolWidth))) nominal points in selected \(store.tool.rawValue) color at \(Int(store.zoom * 100)) percent zoom")
+        .accessibilityLabel("Expanding liquid width control: \(String(format: "%.1f", Double(visibleSize))) screen points in selected \(store.tool.rawValue) color at \(Int(store.zoom * 100)) percent zoom")
     }
 
     private var textNoteCards: some View {
