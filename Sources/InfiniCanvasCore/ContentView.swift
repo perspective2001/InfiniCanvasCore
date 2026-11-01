@@ -76,15 +76,16 @@ struct ContentView: View {
             if store.tool == .marker && store.fixedHighlighter { FixedHighlighterOverlay(store: store) }
             if let focus = store.focusedArea { isolatedAreaShade(focus).allowsHitTesting(false) }
             spatialOrganizerOverlay
-            if store.tool != .capture && !focusMode && store.zoom > 0.5 { textNoteCards
-                .allowsHitTesting(!store.restSafe)
+            if store.tool != .capture && !focusMode && store.zoom > 0.5 {
+                // RestSafe protects the drawing layer; explicit taps/holds on
+                // typed note cards must remain usable so they can be edited
+                // and deleted even while palm guard is enabled.
+                textNoteCards
             }
             if showAreaPins && store.zoom <= 0.55 && !focusMode && store.tool != .capture {
                 semanticOverview
-                    .allowsHitTesting(!store.restSafe)
             } else if showAreaPins && store.zoom <= 0.85 && !focusMode && store.tool != .capture {
                 areaPins
-                    .allowsHitTesting(!store.restSafe)
             }
             if !paperOnly {
                 VStack(spacing: 0) {
