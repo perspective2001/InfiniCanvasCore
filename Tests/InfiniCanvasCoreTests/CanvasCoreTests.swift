@@ -204,14 +204,22 @@ final class CanvasCoreTests: XCTestCase {
                            before.midX * zoom - canvas.contentOffset.x,
                            accuracy: 15, "Live preview must share the lasso coordinate system")
             store.finishSelectionDrag(screenDelta: CGSize(width: 120, height: 60))
-            XCTAssertFalse(store.selectionActive,
-                           "Do not leave old lasso attached after move")
+            XCTAssertTrue(store.selectionActive,
+                          "Selection must follow moved strokes, not disappear after lift")
             XCTAssertEqual(canvas.drawing.strokes.count, 1,
                            "Moving must not duplicate or leave source ink behind")
             let moved = try XCTUnwrap(canvas.drawing.strokes.first).renderBounds
             XCTAssertEqual(moved.midX - before.midX, 120 / zoom, accuracy: 2)
             XCTAssertEqual(moved.midY - before.midY, 60 / zoom, accuracy: 2)
 
+            // Keep and move this SAME selected object again without requiring
+            // a second lasso. Subsequent stash must still find its clip.
+            let secondPreview = store.beginSelectionDrag(in: overlay)
+            XCTAssertNotNil(secondPreview)
+            store.cancelSelectionDrag()
+            XCTAssertEqual(canvas.drawing.strokes.count, 1)
+            XCTAssertTrue(store.selectionActive)
+            store.clearSelection()
             store.captureLasso(outline(CGPoint(x: moved.midX, y: moved.midY)), from: overlay)
             XCTAssertTrue(store.selectionActive,
                           "Moved handwriting must be selectable at its NEW location")
