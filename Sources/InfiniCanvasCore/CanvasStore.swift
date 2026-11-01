@@ -328,6 +328,17 @@ final class CanvasStore: ObservableObject {
         view.pinchGestureRecognizer?.isEnabled = !coveredByOverlay
     }
 
+    // One source of truth shared by PencilKit and the on-screen sizing preview.
+    // It returns the requested nominal width, before Apple Pencil force/tilt.
+    var nominalToolWidth: CGFloat {
+        switch tool {
+        case .marker:
+            return fixedHighlighter ? markerWidth : strokeWidth * 4
+        case .eraser: return eraserWidth
+        default: return strokeWidth
+        }
+    }
+
     func updateTool() {
         guard let view = canvas else { return }
         configureNavigationRecognizers(view)
@@ -343,7 +354,7 @@ final class CanvasStore: ObservableObject {
         case .pencil: view.tool = PKInkingTool(.pencil, color: inkColor, width: strokeWidth)
         case .marker:
             // Native fallback keeps tilt behavior; the fixed-nib overlay commits its own vectors.
-            view.tool = PKInkingTool(.marker, color: inkColor.withAlphaComponent(0.52), width: strokeWidth * 4)
+            view.tool = PKInkingTool(.marker, color: inkColor.withAlphaComponent(0.52), width: nominalToolWidth)
         case .eraser:
             view.tool = PKEraserTool(eraserPrecision == .detail ? .bitmap : .vector, width: eraserWidth)
         case .capture: view.tool = PKLassoTool()
@@ -1016,6 +1027,21 @@ final class CanvasStore: ObservableObject {
     func removeFromStash(_ id: UUID) {
         stashedClipIDs.removeAll { $0 == id }
         saveIndex()
+    }
+
+    // Reordering only changes tab presentation order. A clip's original ink,
+    // vector file and image are never mutated.
+    @discardableResult
+    func moveStashedClip(_ sourceID: UUID, before destinationID: UUID) -> Bool {
+        guard sourceID != destinationID,
+              let sourceIndex = stashedClipIDs.firstIndex(of: sourceID),
+              stashedClipIDs.contains(destinationID) else { return false }
+        stashedClipIDs.remove(at: sourceIndex)
+        guard let destinationIndex = stashedClipIDs.firstIndex(of: destinationID) else { return false }
+        stashedClipIDs.insert(sourceID, at: destinationIndex)
+        saveIndex()
+        status = "Reordered saved handwriting tabs"
+        return true
     }
 
     @discardableResult
