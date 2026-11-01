@@ -50,7 +50,9 @@ final class FixedNibTouchView: UIView, UIGestureRecognizerDelegate {
         addGestureRecognizer(pinch)
         let pan = UIPanGestureRecognizer(target: self, action: #selector(panned(_:)))
         pan.minimumNumberOfTouches = 1
-        pan.maximumNumberOfTouches = 1
+        // Support lateral navigation even when a second finger lands mid-pan;
+        // the simultaneous pinch recognizer owns scale adjustments.
+        pan.maximumNumberOfTouches = 2
         pan.delegate = self
         pan.cancelsTouchesInView = false
         addGestureRecognizer(pan)
@@ -59,7 +61,11 @@ final class FixedNibTouchView: UIView, UIGestureRecognizerDelegate {
     required init?(coder: NSCoder) { fatalError("Storyboards are not used") }
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-        touch.type == .direct && touch.majorRadius < 27
+        // iPad direct finger radius fluctuates with contact angle. The older
+        // 27pt cutoff rejected legitimate broad finger touches, leaving the
+        // full-screen ink overlay unable to pan horizontally at all.
+        // Keep a finite cutoff to ignore large palm contacts.
+        touch.type == .direct && touch.majorRadius < 38
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
