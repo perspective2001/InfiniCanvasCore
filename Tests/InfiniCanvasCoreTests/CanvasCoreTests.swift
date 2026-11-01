@@ -269,6 +269,12 @@ final class CanvasCoreTests: XCTestCase {
             XCTAssertEqual(store.strokeWidth, 20 / zoom, accuracy: 0.03,
                            "Draw 40 canvas pt at 50% zoom, 10 at 200%, for the same 20 screen pt")
             XCTAssertEqual(store.nominalToolWidth * store.zoom, 20, accuracy: 0.04)
+            if let nativePen = canvas.tool as? PKInkingTool {
+                XCTAssertEqual(nativePen.width * store.zoom, 20, accuracy: 0.1,
+                               "Validate actual accepted PencilKit pen width, not just our model")
+            } else {
+                XCTFail("Expected native PKInkingTool for Pen")
+            }
         }
         // Existing content remains untouched by changing drawing tool size.
         let original = PKDrawing(strokes: [makeStroke(.pen, x: 240, y: 300)])
@@ -299,6 +305,10 @@ final class CanvasCoreTests: XCTestCase {
                 XCTAssertEqual(store.selectedScreenNibWidth, 12, accuracy: 0.05)
                 XCTAssertEqual(store.nominalToolWidth * store.zoom, 12, accuracy: 0.05,
                                "Tool \(tool.rawValue) at zoom \(zoom)")
+                if let native = canvas.tool as? PKInkingTool {
+                    XCTAssertEqual(native.width * store.zoom, 12, accuracy: 0.12,
+                                   "PencilKit accepted width for \(tool.rawValue) zoom \(zoom)")
+                }
             }
         }
         window.isHidden = true
