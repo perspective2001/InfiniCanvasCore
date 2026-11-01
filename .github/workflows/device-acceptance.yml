@@ -1,0 +1,49 @@
+name: Device acceptance gate for UI and drawing changes
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: device-acceptance-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  device-acceptance:
+    name: Device-accepted for UI changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Require physical iPad approval on the EXACT candidate commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LABELS_JSON: ${{ toJSON(github.event.pull_request.labels) }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # No checkout and no untrusted PR code runs in this gate.
+          changed="$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files?per_page=100" --jq '.[].filename')"
+          if ! grep -Eq '^Sources/InfiniCanvasCore/.*\\.swift$' <<< "$changed"; then
+            echo "PASS: No native UI/drawing engine source changed; iPad approval not required."
+            exit 0
+          fi
+
+          # Do not silently infer consent from green compilers, a screenshot,
+          # an assistant's summary, or a previous approval on an older SHA.
+          if ! jq -e 'any(.[]; .name == "device-accepted")' <<< "$LABELS_JSON" >/dev/null; then
+            echo "::error::Native app source changed without physical iPad acceptance. Keep this PR draft until the owner tests its branch IPA."
+            exit 1
+          fi
+          if [[ "$PR_BODY" != *"Device-tested SHA: $HEAD_SHA"* ]]; then
+            echo "::error::Approval label exists, but this exact HEAD commit lacks a 'Device-tested SHA: $HEAD_SHA' entry in the PR description."
+            exit 1
+          fi
+          echo "PASS: Owner's device acceptance recorded for $HEAD_SHA."
