@@ -122,15 +122,16 @@ struct ContentView: View {
         .overlay(alignment: .topLeading) {
             if widthPanelExpanded && !paperOnly && !focusMode && penSizeFrame != .null {
                 liquidSizeMorph
-                    // The overlay may become wider than the 84-pt PILL, but
-                    // never changes the pill's position or toolbar layout.
-                    .frame(width: min(500, max(84, visibleSize + 20)),
-                           height: max(9, widthMorphTravel))
+                    // The WHOLE Siri-like liquid bubble rises and grows. Its
+                    // bottom stays anchored to the exact size-pill location.
+                    .frame(width: min(620, max(84, visibleSize + 36)),
+                           height: 44 + max(8, widthMorphTravel))
                     .position(x: penSizeFrame.midX,
-                              y: penSizeFrame.minY - max(9, widthMorphTravel) / 2 + 3)
+                              y: penSizeFrame.maxY -
+                              (44 + max(8, widthMorphTravel)) / 2)
                     .zIndex(100)
                     .allowsHitTesting(false)
-                    .transition(.scale(scale: 0.15, anchor: .bottom).combined(with: .opacity))
+                    .transition(.scale(scale: 0.18, anchor: .bottom).combined(with: .opacity))
             }
             if let id = activeMiniDrag, let point = miniDragPoint,
                let clip = store.clips.first(where: { $0.id == id }),
@@ -978,14 +979,15 @@ struct ContentView: View {
         else { store.strokeWidth = value }
     }
     // Effective screen size is specified in *points*, not device pixels.
-    private var visibleSize: CGFloat { activeSize * store.zoom }
+    private var visibleSize: CGFloat { store.nominalToolWidth * store.zoom }
 
     private var detailedSizePanel: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(store.tool == .eraser ? "Eraser size" : "Pencil / pen size")
                 .font(.headline)
-            Text(String(format: "Base %.1f pt · at %.0f%% zoom: %.1f pt",
-                Double(activeSize), Double(store.zoom * 100), Double(visibleSize)))
+            Text(String(format: "Selected %.1f pt · actual nominal nib %.1f pt · at %.0f%% zoom: %.1f screen pt",
+                Double(activeSize), Double(store.nominalToolWidth),
+                Double(store.zoom * 100), Double(visibleSize)))
                 .font(.caption.monospacedDigit())
             Slider(value: Binding(get: { Double(activeSize) },
                                   set: { applySize(CGFloat($0)) }),
@@ -1048,26 +1050,63 @@ struct ContentView: View {
             })
     }
 
-    // The width isn't a mushroom-shaped cap or uniformly stretched capsule.
-    // The *same ink stroke* rises with the gesture and gains width progressively
-    // along its length (like Apple Pencil pressure), without moving the base.
+    // The outer Siri-style liquid bubble is distinct from its contents:
+    // the original horizontal control expands upward as one fluid surface,
+    // with the selected ink type/color and nominal screen-point width INSIDE.
     private var liquidSizeMorph: some View {
-        let visualThickness = max(1.0, visibleSize)
-        return LiquidPressureStroke(tipWidth: visualThickness)
-            .fill(LinearGradient(stops: [
-                .init(color: teal.opacity(0.68), location: 0),
-                .init(color: Color(red: 0.18, green: 0.64, blue: 0.65), location: 0.53),
-                .init(color: teal.opacity(0.94), location: 1)
-            ], startPoint: .bottom, endPoint: .top))
-            .overlay {
-                LiquidPressureStroke(tipWidth: visualThickness)
-                    .stroke(.white.opacity(0.28), lineWidth: 0.7)
-                    .allowsHitTesting(false)
+        let selectedInk = store.tool == .eraser
+            ? Color.gray : Color(uiColor: store.inkColor)
+        let inkAlpha = store.tool == .marker ? 0.57
+                      : store.tool == .pencil ? 0.86 : 1.0
+        let screenWidth = max(1, visibleSize)
+        let capWidth = min(610, screenWidth)
+
+        return ZStack(alignment: .bottom) {
+            if #available(iOS 26.0, *) {
+                LiquidSizeBubble()
+                    .fill(selectedInk.opacity(0.06))
+                    .glassEffect(.regular.tint(selectedInk.opacity(0.13)),
+                                 in: LiquidSizeBubble())
+            } else {
+                LiquidSizeBubble().fill(.ultraThinMaterial)
             }
-            .shadow(color: teal.opacity(0.15), radius: 5, y: -1)
-            .animation(.interactiveSpring(response: 0.15, dampingFraction: 0.9),
-                       value: visualThickness)
-            .accessibilityLabel("Selected base width \(String(format: "%.1f", Double(activeSize))) points at \(String(format: "%.0f", Double(store.zoom * 100))) percent zoom")
+
+            LiquidSizeBubble()
+                .strokeBorder(.white.opacity(0.45), lineWidth: 1.2)
+                .shadow(color: selectedInk.opacity(0.10), radius: 9, y: -2)
+                .allowsHitTesting(false)
+
+            VStack(spacing: 3) {
+                Image(systemName: store.tool.symbol)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(selectedInk)
+                Text(String(format: "%.1f pt", Double(store.nominalToolWidth)))
+                    .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(selectedInk)
+                GeometryReader { geo in
+                    LiquidPressureStroke(tipWidth: capWidth)
+                        .fill(selectedInk.opacity(inkAlpha))
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .shadow(color: selectedInk.opacity(0.09), radius: 2, y: 0)
+                }
+                .frame(maxHeight: .infinity)
+                HStack(spacing: 4) {
+                    Image(systemName: "lineweight")
+                    Text(String(format: "%.1f", Double(activeSize)))
+                        .monospacedDigit()
+                }
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(selectedInk)
+                .frame(height: 23)
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 17)
+            .padding(.bottom, 5)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .animation(.interactiveSpring(response: 0.23, dampingFraction: 0.80),
+                   value: visibleSize)
+        .accessibilityLabel("Expanding liquid width control: \(String(format: "%.1f", Double(store.nominalToolWidth))) nominal points in selected \(store.tool.rawValue) color at \(Int(store.zoom * 100)) percent zoom")
     }
 
     private var textNoteCards: some View {
@@ -1418,6 +1457,45 @@ private struct ClipActionFramePreferenceKey: PreferenceKey {
     static var defaultValue: [ClipDropAction: CGRect] = [:]
     static func reduce(value: inout [ClipDropAction: CGRect], nextValue: () -> [ClipDropAction: CGRect]) {
         value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
+    }
+}
+
+// One connected rounded liquid surface, with a stationary horizontal
+// bottom where the resting 84pt width pill lives, a softly narrowed neck
+// and a rounded vertical upper capsule.
+private struct LiquidSizeBubble: InsettableShape {
+    var insetAmount: CGFloat = 0
+    func inset(by amount: CGFloat) -> LiquidSizeBubble {
+        var result = self
+        result.insetAmount += amount
+        return result
+    }
+    func path(in rect: CGRect) -> Path {
+        let x = rect.midX
+        let b = rect.maxY - insetAmount
+        let top = rect.minY + insetAmount
+        let halfBottom: CGFloat = 41 - insetAmount
+        let halfUpper = max(41, rect.width / 2 - insetAmount)
+        let radius = min(32, rect.height * 0.22, halfUpper * 0.54)
+        let shoulderY = top + radius
+        let neckY = b - min(35, rect.height * 0.20)
+        var path = Path()
+        path.move(to: CGPoint(x: x-halfBottom, y: b))
+        path.addCurve(to: CGPoint(x: x-halfUpper, y: shoulderY),
+                      control1: CGPoint(x: x-halfBottom, y: neckY),
+                      control2: CGPoint(x: x-halfUpper, y: top + rect.height * 0.45))
+        path.addQuadCurve(to: CGPoint(x: x-halfUpper+radius, y: top),
+                          control: CGPoint(x: x-halfUpper, y: top))
+        path.addLine(to: CGPoint(x: x+halfUpper-radius, y: top))
+        path.addQuadCurve(to: CGPoint(x: x+halfUpper, y: shoulderY),
+                          control: CGPoint(x: x+halfUpper, y: top))
+        path.addCurve(to: CGPoint(x: x+halfBottom, y: b),
+                      control1: CGPoint(x: x+halfUpper, y: top + rect.height * 0.45),
+                      control2: CGPoint(x: x+halfBottom, y: neckY))
+        path.addQuadCurve(to: CGPoint(x: x-halfBottom, y: b),
+                          control: CGPoint(x: x, y: b+2))
+        path.closeSubpath()
+        return path
     }
 }
 
