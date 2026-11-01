@@ -39,6 +39,9 @@ struct ContentView: View {
     @State private var miniDragPoint: CGPoint? = nil
     @State private var stashProximity: CGFloat = 0
     @State private var highlightedDrop: ClipDropAction? = nil
+    @State private var clipTabFrames: [UUID: CGRect] = [:]
+    @State private var dragNearTrash = false
+    @State private var trashDropFrame: CGRect = .null
     @State private var showEraserOptions = false
     @State private var showHighlighterOptions = false
     @State private var showArtStudio = false
@@ -74,15 +77,16 @@ struct ContentView: View {
             if store.tool == .marker && store.fixedHighlighter { FixedHighlighterOverlay(store: store) }
             if let focus = store.focusedArea { isolatedAreaShade(focus).allowsHitTesting(false) }
             spatialOrganizerOverlay
-            if store.tool != .capture && !focusMode && store.zoom > 0.5 { textNoteCards
-                .allowsHitTesting(!store.restSafe)
+            if store.tool != .capture && !focusMode && store.zoom > 0.5 {
+                // RestSafe protects the drawing layer; explicit taps/holds on
+                // typed note cards must remain usable so they can be edited
+                // and deleted even while palm guard is enabled.
+                textNoteCards
             }
             if showAreaPins && store.zoom <= 0.55 && !focusMode && store.tool != .capture {
                 semanticOverview
-                    .allowsHitTesting(!store.restSafe)
             } else if showAreaPins && store.zoom <= 0.85 && !focusMode && store.tool != .capture {
                 areaPins
-                    .allowsHitTesting(!store.restSafe)
             }
             if !paperOnly {
                 VStack(spacing: 0) {
@@ -120,15 +124,18 @@ struct ContentView: View {
         .overlay(alignment: .topLeading) {
             if widthPanelExpanded && !paperOnly && !focusMode && penSizeFrame != .null {
                 liquidSizeMorph
-                    // The overlay may become wider than the 84-pt PILL, but
-                    // never changes the pill's position or toolbar layout.
-                    .frame(width: min(500, max(84, visibleSize + 20)),
-                           height: max(9, widthMorphTravel))
+                    // The WHOLE Siri-like liquid bubble rises and grows. Its
+                    // bottom stays anchored to the exact size-pill location.
+                    .frame(width: min(620, max(84, visibleSize + 36)),
+                           height: min(penSizeFrame.maxY - 5,
+                                       44 + max(8, widthMorphTravel)))
                     .position(x: penSizeFrame.midX,
-                              y: penSizeFrame.minY - max(9, widthMorphTravel) / 2 + 3)
+                              y: penSizeFrame.maxY -
+                                  min(penSizeFrame.maxY - 5,
+                                      44 + max(8, widthMorphTravel)) / 2)
                     .zIndex(100)
                     .allowsHitTesting(false)
-                    .transition(.scale(scale: 0.15, anchor: .bottom).combined(with: .opacity))
+                    .transition(.scale(scale: 0.18, anchor: .bottom).combined(with: .opacity))
             }
             if let id = activeMiniDrag, let point = miniDragPoint,
                let clip = store.clips.first(where: { $0.id == id }),
@@ -414,9 +421,18 @@ struct ContentView: View {
         // High priority on the *actual header*, not only a tiny invisible
         // strip. Taps still trigger buttons because the recognizer requires
         // a deliberate drag. Both finger and Pencil can begin the swipe here.
-        .highPriorityGesture(
-            DragGesture(minimumDistance: 13)
-                .onEnded(handleHeaderVerticalSwipe)
+        // The upper header MUST NOT steal Pencil drags from buttons / clips.
+        // The swipe is recognized only when initiated on the header's own
+        // background, not its children (Learn, Organize, Trash etc.).
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 20)
+                .onEnded { value in
+                    guard activeMiniDrag == nil,
+                          !widthPanelExpanded,
+                          store.tool != .capture else { return }
+                    handleHeaderVerticalSwipe(value)
+                },
+            including: .gesture
         )
     }
 
@@ -475,9 +491,21 @@ struct ContentView: View {
         } label: {
             Image(systemName: "trash")
                 .font(.system(size: 17, weight: .regular))
+                .foregroundStyle(dragNearTrash ? .red : .primary)
+                .scaleEffect(dragNearTrash ? 1.14 : 1.0)
                 .frame(width: 34, height: 40)
+                .animation(.spring(response: 0.2, dampingFraction: 0.65),
+                           value: dragNearTrash)
         }
         .buttonStyle(.borderless)
+        .background {
+            GeometryReader { geo in
+                Color.clear.preference(key: TrashDropFramePreferenceKey.self,
+                    value: geo.frame(in: .named("infini-canvas-root")))
+            }
+        }
+        .onPreferenceChange(TrashDropFramePreferenceKey.self) { trashDropFrame = $0 }
+        .hoverEffect(.highlight)
         .accessibilityLabel("Trash, remove categories and edit saved thumbnails")
     }
 
@@ -708,47 +736,66 @@ struct ContentView: View {
                     }.buttonStyle(.bordered)
                 }
                 penWidthTrigger
+                if store.tool == .capture || !store.stashedClips.isEmpty {
+                    stashWell
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 5)
-            }
-            if store.tool == .capture || !store.stashedClips.isEmpty {
-                stashWell
-                    .padding(.trailing, 11)
             }
         }
         .frame(height: 59)
         .background(Color(red: 0.964, green: 0.967, blue: 0.962))
         .scrollIndicators(.hidden)
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 13).onEnded { value in
-                guard abs(value.translation.height) > 24,
-                      abs(value.translation.height) > abs(value.translation.width) * 1.3
-                else { return }
-                withAnimation(.spring(response: 0.26, dampingFraction: 0.78)) {
-                    showTopBar = value.translation.height > 0
-                }
+        .background {
+            GeometryReader { geo in
+                // EVERY POINT of the drawing tools/colours strip is a valid
+                // lasso drop destination, not a tiny rounded "Drop ink" well.
+                Color.clear.preference(key: StashDropFramePreferenceKey.self,
+                    value: geo.frame(in: .named("infini-canvas-root")))
             }
+        }
+        .onPreferenceChange(StashDropFramePreferenceKey.self) { stashDropFrame = $0 }
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 20).onEnded { value in
+                guard !widthPanelExpanded, activeMiniDrag == nil,
+                      store.tool != .capture, !store.selectionActive else { return }
+                handleHeaderVerticalSwipe(value)
+            }, including: .gesture
         )
     }
 
     // Lassoed original ink stays on canvas. Only the miniature, persistent clip
     // is stashed; PencilKit restores any detached drag preview on drop.
+    // A dock LANE inside the existing colour/pen tool bar, not a separate
+    // tiny drop button. Each clip becomes a full-size draggable/reorderable tab.
     private var stashWell: some View {
         HStack(spacing: 5) {
-            Image(systemName: "tray.and.arrow.down")
-                .font(.system(size: 13, weight: .medium))
-                .opacity(store.stashedClips.isEmpty ? 0.42 : 0.75)
-            ForEach(store.stashedClips.suffix(5)) { clip in
+            ForEach(store.stashedClips) { clip in
                 if let preview = store.clipImage(clip) {
                     Image(uiImage: preview)
-                        .resizable().scaledToFit()
-                        .frame(width: 35, height: 26)
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                        .padding(3)
-                        .background(teal.opacity(0.10),
-                                    in: RoundedRectangle(cornerRadius: 9))
-                        .contentShape(RoundedRectangle(cornerRadius: 9))
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 61, height: 38)
+                        .padding(.horizontal, 5)
+                        .frame(width: 75, height: 48)
+                        .background(.thinMaterial,
+                                    in: RoundedRectangle(cornerRadius: 12))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 12)
+                                .strokeBorder(.white.opacity(0.52), lineWidth: 0.9)
+                                .allowsHitTesting(false)
+                        }
+                        .background {
+                            GeometryReader { geo in
+                                Color.clear.preference(
+                                    key: ClipTabFramePreferenceKey.self,
+                                    value: [clip.id:
+                                        geo.frame(in: .named("infini-canvas-root"))])
+                            }
+                        }
+                        .contentShape(RoundedRectangle(cornerRadius: 12))
+                        .hoverEffect(.lift)
                         .gesture(
                             DragGesture(minimumDistance: 3,
                                         coordinateSpace: .named("infini-canvas-root"))
@@ -756,28 +803,43 @@ struct ContentView: View {
                                     activeMiniDrag = clip.id
                                     miniDragPoint = value.location
                                     highlightedDrop = clipTargetFrames.first(where: {
-                                        $0.value.insetBy(dx: -16, dy: -12).contains(value.location)
+                                        $0.value.insetBy(dx: -16, dy: -12)
+                                            .contains(value.location)
                                     })?.key
+                                    dragNearTrash = trashDropFrame
+                                        .insetBy(dx: -17, dy: -15)
+                                        .contains(value.location)
                                 }
                                 .onEnded { value in
-                                    if let target = clipTargetFrames.first(where: {
-                                        $0.value.insetBy(dx: -16, dy: -12).contains(value.location)
+                                    if trashDropFrame.insetBy(dx: -17, dy: -15)
+                                        .contains(value.location) {
+                                        store.deleteClip(clip)
+                                    } else if let action = clipTargetFrames.first(where: {
+                                        $0.value.insetBy(dx: -16, dy: -12)
+                                            .contains(value.location)
                                     })?.key {
-                                        _ = handleClipDrop(clip.id, action: target)
+                                        _ = handleClipDrop(clip.id, action: action)
+                                    } else if let other = clipTabFrames.first(where: {
+                                        $0.key != clip.id && $0.value
+                                            .insetBy(dx: -8, dy: -8)
+                                            .contains(value.location)
+                                    })?.key {
+                                        _ = store.moveStashedClip(clip.id, before: other)
                                     }
-                                    withAnimation(.spring(response: 0.25, dampingFraction: 0.77)) {
+                                    withAnimation(.spring(response: 0.23,
+                                                          dampingFraction: 0.77)) {
                                         activeMiniDrag = nil
                                         miniDragPoint = nil
                                         highlightedDrop = nil
+                                        dragNearTrash = false
                                     }
                                 }
                         )
                         .simultaneousGesture(
-                            LongPressGesture(minimumDuration: 0.48).onEnded { _ in
-                                withAnimation(.spring(response: 0.22, dampingFraction: 0.8)) {
-                                    editingMiniClips = true
+                            LongPressGesture(minimumDuration: 0.48)
+                                .onEnded { _ in
+                                    withAnimation { editingMiniClips = true }
                                 }
-                            }
                         )
                         .overlay(alignment: .topTrailing) {
                             if editingMiniClips {
@@ -791,41 +853,26 @@ struct ContentView: View {
                                 }
                                 .buttonStyle(.plain)
                                 .offset(x: 6, y: -7)
-                                .accessibilityLabel("Move saved \(clip.title) thumbnail to Trash")
                             }
                         }
-                        .accessibilityLabel("Drag handwriting mini-card to Learn, ChatGPT or Organizer; hold to reveal delete")
+                        .accessibilityLabel("Ink tab \(clip.title), drag to reorder or to upper bar functions; hold for delete")
                 }
             }
             if store.stashedClips.isEmpty {
-                Text("Drop ink")
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.secondary)
+                // The whole toolbar receives the ink. This is only an inline
+                // quiet hint, not a small isolated drop destination.
+                Text("Drop anywhere on this bar")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary.opacity(0.68))
+                    .frame(minWidth: 146, minHeight: 42)
+                    .padding(.horizontal, 7)
             }
         }
-        .frame(minWidth: 134, minHeight: 44)
-        .padding(.horizontal, 10)
-        .background(.thinMaterial, in: Capsule())
-        .overlay(Capsule().stroke(teal.opacity(0.16 + stashProximity * 0.54),
-                                  lineWidth: 0.6 + stashProximity * 1.4))
-        .scaleEffect(1 + stashProximity * 0.035)
-        .animation(.spring(response: 0.22, dampingFraction: 0.75),
-                   value: stashProximity)
-        .background {
-            GeometryReader { geo in
-                Color.clear.preference(
-                    key: StashDropFramePreferenceKey.self,
-                    value: geo.frame(in: .named("infini-canvas-root")))
-            }
+        .animation(.spring(response: 0.27, dampingFraction: 0.80),
+                   value: store.stashedClipIDs)
+        .onPreferenceChange(ClipTabFramePreferenceKey.self) {
+            clipTabFrames = $0
         }
-        .onPreferenceChange(StashDropFramePreferenceKey.self) { stashDropFrame = $0 }
-        .simultaneousGesture(TapGesture().onEnded {
-            // Deliberate accessibility fallback for physical iPad variations
-            // in Pencil touch routing. This does not replace drag-to-tray.
-            if store.selectionActive { _ = store.stashSelectedInk() }
-        })
-        .accessibilityHint("Drag selected handwriting here, or tap to stash the active lasso")
-        .animation(.spring(response: 0.3, dampingFraction: 0.77), value: store.stashedClipIDs.count)
     }
 
     // Destination targets belong in the FIRST (logo + RestSafe) command bar.
@@ -861,6 +908,7 @@ struct ContentView: View {
                         // Finger tap on Organize jumps there; dragging ink onto it adds.
                         if action == .organize { store.openSpatialOrganizer() }
                     }
+                    .hoverEffect(.highlight)
                     .accessibilityLabel(action == .organize
                                         ? "Organize: tap to navigate, drop a clip to store"
                                         : "Drop a stashed handwriting clip into \(action.rawValue)")
@@ -942,33 +990,32 @@ struct ContentView: View {
         }
     }
 
-    private var activeSize: CGFloat {
-        store.tool == .eraser ? store.eraserWidth : store.strokeWidth
-    }
+    // UI works in apparent ON-SCREEN points, independent of canvas zoom.
+    private var activeSize: CGFloat { store.selectedScreenNibWidth }
     private var activeSizeLimits: ClosedRange<CGFloat> {
         if store.tool == .eraser { return 3...100 }
         return 0.4...(store.mode == .art ? 240 : 160)
     }
     private func applySize(_ requested: CGFloat) {
         let range = activeSizeLimits
-        let value = min(range.upperBound, max(range.lowerBound, requested))
-        if store.tool == .eraser { store.eraserWidth = value }
-        else { store.strokeWidth = value }
+        store.setSelectedScreenNibWidth(
+            min(range.upperBound, max(range.lowerBound, requested)))
     }
-    // Effective screen size is specified in *points*, not device pixels.
-    private var visibleSize: CGFloat { activeSize * store.zoom }
+    // Preview and the next nominal stroke use the same apparent width.
+    private var visibleSize: CGFloat { store.selectedScreenNibWidth }
 
     private var detailedSizePanel: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(store.tool == .eraser ? "Eraser size" : "Pencil / pen size")
                 .font(.headline)
-            Text(String(format: "Base %.1f pt · at %.0f%% zoom: %.1f pt",
-                Double(activeSize), Double(store.zoom * 100), Double(visibleSize)))
+            Text(String(format: "Preview %.1f screen pt · underlying nib %.1f canvas pt at %.0f%% zoom",
+                Double(visibleSize), Double(store.nominalToolWidth),
+                Double(store.zoom * 100)))
                 .font(.caption.monospacedDigit())
             Slider(value: Binding(get: { Double(activeSize) },
                                   set: { applySize(CGFloat($0)) }),
                    in: Double(activeSizeLimits.lowerBound)...Double(activeSizeLimits.upperBound))
-            Text("PencilKit's pressure and tilt may change a stroke's actual edge. The selected base width remains unchanged when you zoom.")
+            Text("The next stroke keeps the selected apparent width at any zoom. Existing ink scales naturally. Native PencilKit pressure and tilt can vary the exact edge of expressive brushes.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .padding(18)
@@ -997,7 +1044,8 @@ struct ContentView: View {
             }
         }
         .onPreferenceChange(PenSizeFramePreferenceKey.self) { penSizeFrame = $0 }
-        .accessibilityLabel("Base size \(String(format: "%.1f", Double(activeSize))) points")
+        .hoverEffect(.lift)
+        .accessibilityLabel("On-screen size \(String(format: "%.1f", Double(activeSize))) points")
         .accessibilityHint("Swipe up to resize with the liquid stroke, lift to collapse; tap for details")
         .highPriorityGesture(DragGesture(minimumDistance: 7)
             .onChanged { value in
@@ -1026,26 +1074,63 @@ struct ContentView: View {
             })
     }
 
-    // The width isn't a mushroom-shaped cap or uniformly stretched capsule.
-    // The *same ink stroke* rises with the gesture and gains width progressively
-    // along its length (like Apple Pencil pressure), without moving the base.
+    // The outer Siri-style liquid bubble is distinct from its contents:
+    // the original horizontal control expands upward as one fluid surface,
+    // with the selected ink type/color and nominal screen-point width INSIDE.
     private var liquidSizeMorph: some View {
-        let visualThickness = max(1.0, visibleSize)
-        return LiquidPressureStroke(tipWidth: visualThickness)
-            .fill(LinearGradient(stops: [
-                .init(color: teal.opacity(0.68), location: 0),
-                .init(color: Color(red: 0.18, green: 0.64, blue: 0.65), location: 0.53),
-                .init(color: teal.opacity(0.94), location: 1)
-            ], startPoint: .bottom, endPoint: .top))
-            .overlay {
-                LiquidPressureStroke(tipWidth: visualThickness)
-                    .stroke(.white.opacity(0.28), lineWidth: 0.7)
-                    .allowsHitTesting(false)
+        let selectedInk = store.tool == .eraser
+            ? Color.gray : Color(uiColor: store.inkColor)
+        let inkAlpha = store.tool == .marker ? 0.57
+                      : store.tool == .pencil ? 0.86 : 1.0
+        let screenWidth = max(1, visibleSize)
+        let capWidth = min(610, screenWidth)
+
+        return ZStack(alignment: .bottom) {
+            if #available(iOS 26.0, *) {
+                LiquidSizeBubble()
+                    .fill(selectedInk.opacity(0.06))
+                    .glassEffect(.regular.tint(selectedInk.opacity(0.13)),
+                                 in: LiquidSizeBubble())
+            } else {
+                LiquidSizeBubble().fill(.ultraThinMaterial)
             }
-            .shadow(color: teal.opacity(0.15), radius: 5, y: -1)
-            .animation(.interactiveSpring(response: 0.15, dampingFraction: 0.9),
-                       value: visualThickness)
-            .accessibilityLabel("Selected base width \(String(format: "%.1f", Double(activeSize))) points at \(String(format: "%.0f", Double(store.zoom * 100))) percent zoom")
+
+            LiquidSizeBubble()
+                .strokeBorder(.white.opacity(0.45), lineWidth: 1.2)
+                .shadow(color: selectedInk.opacity(0.10), radius: 9, y: -2)
+                .allowsHitTesting(false)
+
+            VStack(spacing: 3) {
+                Image(systemName: store.tool.symbol)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(selectedInk)
+                Text(String(format: "%.1f pt", Double(visibleSize)))
+                    .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(selectedInk)
+                GeometryReader { geo in
+                    LiquidPressureStroke(tipWidth: capWidth)
+                        .fill(selectedInk.opacity(inkAlpha))
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .shadow(color: selectedInk.opacity(0.09), radius: 2, y: 0)
+                }
+                .frame(maxHeight: .infinity)
+                HStack(spacing: 4) {
+                    Image(systemName: "lineweight")
+                    Text(String(format: "%.1f", Double(activeSize)))
+                        .monospacedDigit()
+                }
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(selectedInk)
+                .frame(height: 23)
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 17)
+            .padding(.bottom, 5)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .animation(.interactiveSpring(response: 0.23, dampingFraction: 0.80),
+                   value: visibleSize)
+        .accessibilityLabel("Expanding liquid width control: \(String(format: "%.1f", Double(visibleSize))) screen points in selected \(store.tool.rawValue) color at \(Int(store.zoom * 100)) percent zoom")
     }
 
     private var textNoteCards: some View {
@@ -1384,10 +1469,65 @@ private struct PenSizeFramePreferenceKey: PreferenceKey {
     }
 }
 
+private struct TrashDropFramePreferenceKey: PreferenceKey {
+    static var defaultValue: CGRect = .null
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let rect = nextValue()
+        if !rect.isNull { value = rect }
+    }
+}
+
+private struct ClipTabFramePreferenceKey: PreferenceKey {
+    static var defaultValue: [UUID: CGRect] = [:]
+    static func reduce(value: inout [UUID: CGRect],
+                       nextValue: () -> [UUID: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
+    }
+}
+
 private struct ClipActionFramePreferenceKey: PreferenceKey {
     static var defaultValue: [ClipDropAction: CGRect] = [:]
     static func reduce(value: inout [ClipDropAction: CGRect], nextValue: () -> [ClipDropAction: CGRect]) {
         value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
+    }
+}
+
+// One connected rounded liquid surface, with a stationary horizontal
+// bottom where the resting 84pt width pill lives, a softly narrowed neck
+// and a rounded vertical upper capsule.
+private struct LiquidSizeBubble: InsettableShape {
+    var insetAmount: CGFloat = 0
+    func inset(by amount: CGFloat) -> LiquidSizeBubble {
+        var result = self
+        result.insetAmount += amount
+        return result
+    }
+    func path(in rect: CGRect) -> Path {
+        let x = rect.midX
+        let b = rect.maxY - insetAmount
+        let top = rect.minY + insetAmount
+        let halfBottom: CGFloat = 41 - insetAmount
+        let halfUpper = max(41, rect.width / 2 - insetAmount)
+        let radius = min(32, rect.height * 0.22, halfUpper * 0.54)
+        let shoulderY = top + radius
+        let neckY = b - min(35, rect.height * 0.20)
+        var path = Path()
+        path.move(to: CGPoint(x: x-halfBottom, y: b))
+        path.addCurve(to: CGPoint(x: x-halfUpper, y: shoulderY),
+                      control1: CGPoint(x: x-halfBottom, y: neckY),
+                      control2: CGPoint(x: x-halfUpper, y: top + rect.height * 0.45))
+        path.addQuadCurve(to: CGPoint(x: x-halfUpper+radius, y: top),
+                          control: CGPoint(x: x-halfUpper, y: top))
+        path.addLine(to: CGPoint(x: x+halfUpper-radius, y: top))
+        path.addQuadCurve(to: CGPoint(x: x+halfUpper, y: shoulderY),
+                          control: CGPoint(x: x+halfUpper, y: top))
+        path.addCurve(to: CGPoint(x: x+halfBottom, y: b),
+                      control1: CGPoint(x: x+halfUpper, y: top + rect.height * 0.45),
+                      control2: CGPoint(x: x+halfBottom, y: neckY))
+        path.addQuadCurve(to: CGPoint(x: x-halfBottom, y: b),
+                          control: CGPoint(x: x, y: b+2))
+        path.closeSubpath()
+        return path
     }
 }
 
