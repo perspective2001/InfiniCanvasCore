@@ -90,22 +90,12 @@ struct ContentView: View {
                         if showTopBar {
                             topChromeGrip
                             header
-                            if !store.stashedClips.isEmpty { clipActionShelf }
                         } else {
                             // Compact mode puts the actual tools almost flush to the top.
                             // The thin transparent grip still accepts a deliberate down swipe.
                             topChromeGrip.frame(height: 10)
                         }
                         toolShelf
-                        if store.tool == .capture && (store.selectionActive || !store.stashedClips.isEmpty) {
-                            HStack {
-                                Spacer(minLength: 0)
-                                stashWell
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 2)
-                            .transition(.move(edge: .top).combined(with: .opacity))
-                        }
                     }
                     Spacer(minLength: 0)
                     if store.tool == .capture && !focusMode { lassoActions }
@@ -282,7 +272,7 @@ struct ContentView: View {
             // No coloured tab remains visible when the menus are hidden.
             Color.clear.frame(width: 52, height: 6).allowsHitTesting(false)
         }
-        .frame(height: 30)
+        .frame(height: 9)
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
         .onTapGesture {
@@ -394,6 +384,7 @@ struct ContentView: View {
                 .accessibilityHint("Open the separately saved layered Art Studio")
             }
             Spacer(minLength: 4)
+            clipActionShelf
             palmModeButton
             Menu {
                 Button("Overview · 14%", systemImage: "square.dashed") { store.zoomToOverview() }
@@ -531,7 +522,8 @@ struct ContentView: View {
     }
 
     private var toolShelf: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 Button {
                     withAnimation(.spring(response: 0.32, dampingFraction: 0.84)) {
@@ -664,16 +656,22 @@ struct ContentView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 5)
+            }
+            if store.tool == .capture || !store.stashedClips.isEmpty {
+                stashWell
+                    .padding(.trailing, 11)
+            }
         }
+        .frame(height: 59)
         .background(Color(red: 0.964, green: 0.967, blue: 0.962))
         .scrollIndicators(.hidden)
         .simultaneousGesture(
-            DragGesture(minimumDistance: 18).onEnded { value in
-                guard !showTopBar, value.translation.height > 34,
+            DragGesture(minimumDistance: 13).onEnded { value in
+                guard abs(value.translation.height) > 24,
                       abs(value.translation.height) > abs(value.translation.width) * 1.3
                 else { return }
-                withAnimation(.spring(response: 0.27, dampingFraction: 0.8)) {
-                    showTopBar = true
+                withAnimation(.spring(response: 0.26, dampingFraction: 0.78)) {
+                    showTopBar = value.translation.height > 0
                 }
             }
         )
@@ -723,12 +721,12 @@ struct ContentView: View {
                 }
             }
             if store.stashedClips.isEmpty {
-                Text("Drop lasso here")
+                Text("Drop ink")
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(.secondary)
             }
         }
-        .frame(minWidth: 140, minHeight: 35)
+        .frame(minWidth: 134, minHeight: 44)
         .padding(.horizontal, 10)
         .background(.thinMaterial, in: Capsule())
         .overlay(Capsule().stroke(teal.opacity(0.16 + stashProximity * 0.54),
@@ -747,19 +745,23 @@ struct ContentView: View {
         .animation(.spring(response: 0.3, dampingFraction: 0.77), value: store.stashedClipIDs.count)
     }
 
+    // Destination targets belong in the FIRST (logo + RestSafe) command bar.
+    // They stay fixed there; the receiving strip belongs in the SECOND row.
     private var clipActionShelf: some View {
-        HStack(spacing: 9) {
+        HStack(spacing: 5) {
             ForEach(ClipDropAction.allCases, id: \.self) { action in
                 Label(action.rawValue, systemImage: action.icon)
-                    .font(.caption2.weight(.semibold))
+                    .font(.system(size: 11, weight: .medium))
+                    .lineLimit(1)
                     .foregroundStyle(highlightedDrop == action ? .white : teal)
-                    .padding(.horizontal, 9)
-                    .frame(height: 34)
-                    .background(highlightedDrop == action ? teal : teal.opacity(0.035),
-                                in: RoundedRectangle(cornerRadius: 14))
+                    .padding(.horizontal, 7)
+                    .frame(height: 37)
+                    .background(highlightedDrop == action
+                                ? teal.opacity(0.88) : .white.opacity(0.26),
+                                in: RoundedRectangle(cornerRadius: 10))
                     .overlay {
-                        RoundedRectangle(cornerRadius: 14)
-                            .stroke(.white.opacity(0.46), lineWidth: 0.7)
+                        RoundedRectangle(cornerRadius: 10)
+                            .strokeBorder(.white.opacity(0.38), lineWidth: 0.8)
                             .allowsHitTesting(false)
                     }
                     .background {
@@ -773,15 +775,16 @@ struct ContentView: View {
                         return handleClipDrop(id, action: action)
                     }
                     .onTapGesture {
+                        // Finger tap on Organize jumps there; dragging ink onto it adds.
                         if action == .organize { store.openSpatialOrganizer() }
                     }
+                    .accessibilityLabel(action == .organize
+                                        ? "Organize: tap to navigate, drop a clip to store"
+                                        : "Drop a stashed handwriting clip into \(action.rawValue)")
             }
-            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 2)
+        .fixedSize(horizontal: true, vertical: false)
         .onPreferenceChange(ClipActionFramePreferenceKey.self) { clipTargetFrames = $0 }
-        .transition(.move(edge: .top).combined(with: .opacity))
     }
 
     private func handleClipDrop(_ id: UUID, action: ClipDropAction) -> Bool {
@@ -1123,7 +1126,7 @@ struct ChatDestinationView: View {
                 }
                 Section("Highlighter and interface") {
                     Toggle("Fixed vertical highlighter nib", isOn: $store.fixedHighlighter)
-                    Text("Swipe up on the top grip to hide the command bar, down to restore it. Tap or double-tap the right edge for a clean paper-only view. Swipe up from the width icon to open a vertical pen-size control; keep dragging to change thickness, then swipe down or tap Done.")
+                    Text("Swipe up on the command bar or drawing tools to tuck away the upper bar; swipe down on the remaining tools to restore it. Double tap the right edge for paper-only. Drag upward on the width pill to preview a variable-width stroke; lift to finish, or tap for detailed sizing.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Canvas") {
