@@ -31,7 +31,7 @@ jobs:
           set -euo pipefail
           # No checkout and no untrusted PR code runs in this gate.
           changed="$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files?per_page=100" --jq '.[].filename')"
-          if ! grep -Eq '^Sources/InfiniCanvasCore/.*\\.swift$' <<< "$changed"; then
+          if ! grep -Eq '^Sources/InfiniCanvasCore/.*\.swift$' <<< "$changed"; then
             echo "PASS: No native UI/drawing engine source changed; iPad approval not required."
             exit 0
           fi
