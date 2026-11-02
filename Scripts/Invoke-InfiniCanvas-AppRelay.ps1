@@ -4,7 +4,7 @@
 # Usage (from PowerShell):
 #   .\Invoke-InfiniCanvas-AppRelay.ps1
 param(
-  [string]$Branch = 'candidate-infini-navigation-delete-morph-20261102',
+  [string]$Branch = 'candidate-infini-expressive-ink-20261102',
   [string]$Destination = (Join-Path $env:USERPROFILE 'Downloads\InfiniCanvas-AppRelay'),
   [switch]$DownloadOnly
 )
