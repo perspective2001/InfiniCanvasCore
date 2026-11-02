@@ -67,6 +67,11 @@ struct ContentView: View {
             PencilCanvas(store: store)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+            // Preserve native Apple Pencil rendering whenever the selected
+            // width is actually supported. Override only clamped tool nibs.
+            if store.needsScreenWidthInkOverlay {
+                ScreenWidthInkOverlay(store: store)
+            }
             if store.tool == .capture {
                 LassoOverlay(store: store, stashDropFrame: stashDropFrame,
                              onStashProximity: { value in
@@ -1108,9 +1113,11 @@ struct ContentView: View {
                       : store.tool == .pencil ? 0.86 : 1.0
         // PencilKit clamps tool-specific widths. Do not render a fabricated
         // 127pt stroke preview if its native tool accepted only a thin nib.
-        let nativeWidth = store.acceptedNativeScreenNibWidth ?? visibleSize
-        let measuredWidth = max(0.4, nativeWidth)
-        let wasClamped = abs(nativeWidth - visibleSize) > 0.5
+        let customWidth = store.needsScreenWidthInkOverlay
+        let measuredWidth = max(0.4,
+            customWidth ? visibleSize : (store.acceptedNativeScreenNibWidth ?? visibleSize))
+        let wasClamped = !customWidth &&
+            abs((store.acceptedNativeScreenNibWidth ?? visibleSize) - visibleSize) > 0.5
         let bubble = LiquidSizeBubble(anchorX: anchorX)
 
         return ZStack(alignment: .bottom) {
@@ -1150,7 +1157,7 @@ struct ContentView: View {
         }
         .animation(.interactiveSpring(response: 0.23, dampingFraction: 0.80),
                    value: measuredWidth)
-        .accessibilityLabel("Selected \(String(format: "%.1f", Double(visibleSize))) point width. Actual PencilKit base width \(String(format: "%.1f", Double(measuredWidth))) points on screen at \(Int(store.zoom * 100)) percent zoom.")
+        .accessibilityLabel("Selected \(String(format: "%.1f", Double(visibleSize))) point width. Nominal \(String(format: "%.1f", Double(measuredWidth))) screen points, \(customWidth ? "experimental editable stroke" : "native PencilKit"), at \(Int(store.zoom * 100)) percent zoom.")
     }
 
     // DEBUG-ONLY: exposes ACTUAL ContentView + native Liquid Glass morph states
