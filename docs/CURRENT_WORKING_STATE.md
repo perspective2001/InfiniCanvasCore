@@ -1,6 +1,14 @@
 # CURRENT WORKING STATE — InfiniCanvas
 *Always read this one page before an InfiniCanvas edit; update only when a decision or verified state changes. Last updated 2026-11-01.*
 
+## November 2 combined repair candidate — NOT RELEASED
+- **Existing native iPad app only.** Draft [PR #28](https://github.com/perspective2001/InfiniCanvasCore/pull/28) combines RestSafe navigation + inserted text/link long-press soft-trash/restore (PR #26) with the native morph experiment/accepted-width readback (PR #27). Preserve installed documents, app identity and accepted toolbar positions.
+- **Actual visual inspection:** CI run [41360380211](https://github.com/perspective2001/InfiniCanvasCore/actions/runs/41360380211), artifact 13105441789, captured actual 2064×2752 native iPad rest and 25%, 60%, 100% expansion frames and a 3.88-second native animation. Inspected pixels and video frames: the bubble was clipped off RIGHT EDGE and produced a black triangular wedge at large width. Previous shape is rejected.
+- **New shape candidate:** bounded glass within real iPad viewport; surface shifts inward while lower end anchors to original size pill; top stays below status bar; curved pressure trail. The UI distinguishes requested target size from actual `PKInkingTool.width * zoom` and labels limits honestly. This does NOT yet solve large-width WYSIWYG across all zooms.
+- **CI improvement:** run native compositor screenshots before XCTest on iOS26 runner: prior runs often locked CoreSimulator after PencilKit test, timing out at 55 or 150s. XCTest runs even after capture failure. Evaluate latest exact-SHA outputs before claiming improvement.
+- **Copy-paste Windows helper:** `Scripts/Get-VerifiedInfiniCanvasPreview.ps1` downloads only an existing successful unsigned preview IPA matching an explicitly given 40-character source SHA, and never builds, signs or installs anything.
+- **Blocked until:** exact-SHA iOS26 and Xcode27 tests, inspected NEW portrait and motion evidence, pressure/tilt, real Pencil Pro gesture tests and saved data restore. No new tag or primary-identity IPA. Do not imply user approved physical device testing.
+
 ## Current reality — never infer from a former chat
 - **Production branch:** `main`. Do not treat the most recent commit, green compilation, or latest IPA as a known-good device build. `docs/KNOWN_BASELINE.md` records the device baseline.
 - **Experimental drawing work:** Draft [PR #18](https://github.com/perspective2001/InfiniCanvasCore/pull/18) remains **REJECTED and unmerged**. User's real screenshot showed huge `127pt` morph preview with a hairline stroke at 10.2% zoom, and a bad box/funnel instead of a Siri-like morph. The simulator width tests also failed. Don't release it as accurate.
