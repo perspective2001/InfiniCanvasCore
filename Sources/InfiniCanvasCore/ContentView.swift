@@ -130,21 +130,14 @@ struct ContentView: View {
                     // The original pill stays where it is. The liquid surface
                     // may shift LEFT to remain fully on screen; its BASE stays
                     // anchored to the original pill instead of drifting away.
-                    let margin: CGFloat = 8
-                    let panelWidth = min(max(92, visibleSize + 48),
-                                         min(210, viewport.size.width - margin * 2))
-                    let centerX = min(viewport.size.width - panelWidth / 2 - margin,
-                                      max(panelWidth / 2 + margin, penSizeFrame.midX))
-                    let panelLeft = centerX - panelWidth / 2
-                    let pinX = min(panelWidth - 42,
-                                   max(42, penSizeFrame.midX - panelLeft))
-                    // Never push the top glass into the iPad status bar.
-                    let panelHeight = max(58, min(penSizeFrame.maxY - 30,
-                                                    44 + max(8, widthMorphTravel)))
-                    liquidSizeMorph(anchorX: pinX)
-                        .frame(width: panelWidth, height: panelHeight)
-                        .position(x: centerX,
-                                  y: penSizeFrame.maxY - panelHeight / 2)
+                    let placement = WidthMorphPlacement(
+                        viewportWidth: viewport.size.width,
+                        trigger: penSizeFrame,
+                        selectedWidth: visibleSize,
+                        travel: widthMorphTravel)
+                    liquidSizeMorph(anchorX: placement.anchorX)
+                        .frame(width: placement.width, height: placement.height)
+                        .position(x: placement.centerX, y: placement.centerY)
                         .zIndex(100)
                         .transition(.opacity)
                 }
@@ -1581,6 +1574,33 @@ private struct ClipActionFramePreferenceKey: PreferenceKey {
 // One connected rounded liquid surface, with a stationary horizontal
 // bottom where the resting 84pt width pill lives, a softly narrowed neck
 // and a rounded vertical upper capsule.
+// Pure geometry used by both the actual native SwiftUI overlay and
+// deterministic edge-clipping tests. Original size pill is never repositioned.
+struct WidthMorphPlacement {
+    let width: CGFloat
+    let height: CGFloat
+    let centerX: CGFloat
+    let centerY: CGFloat
+    let anchorX: CGFloat
+
+    init(viewportWidth: CGFloat, trigger: CGRect,
+         selectedWidth: CGFloat, travel: CGFloat) {
+        let margin: CGFloat = 8
+        let viewport = max(240, viewportWidth)
+        let boundedWidth = min(max(92, selectedWidth + 48), min(210, viewport - 2 * margin))
+        let center = min(viewport - boundedWidth / 2 - margin,
+                         max(boundedWidth / 2 + margin, trigger.midX))
+        let left = center - boundedWidth / 2
+        let anchor = min(boundedWidth - 42, max(42, trigger.midX - left))
+        let boundedHeight = max(58, min(trigger.maxY - 30, 44 + max(8, travel)))
+        width = boundedWidth
+        height = boundedHeight
+        centerX = center
+        centerY = trigger.maxY - boundedHeight / 2
+        anchorX = anchor
+    }
+}
+
 private struct LiquidSizeBubble: InsettableShape {
     var anchorX: CGFloat
     var insetAmount: CGFloat = 0
