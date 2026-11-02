@@ -181,6 +181,27 @@ final class CanvasCoreTests: XCTestCase {
         window.isHidden = true
     }
 
+    func testNativeMorphPlacementPreservesScreenBoundsAndOriginalPillAnchor() {
+        for viewportWidth: CGFloat in [768, 834, 1024, 1366] {
+            for selectedWidth: CGFloat in [2.5, 15, 60, 127, 160] {
+                let trigger = CGRect(x: viewportWidth - 137, y: 111,
+                                     width: 84, height: 44)
+                let placement = WidthMorphPlacement(
+                    viewportWidth: viewportWidth,
+                    trigger: trigger, selectedWidth: selectedWidth,
+                    travel: 290)
+                let left = placement.centerX - placement.width / 2
+                let right = placement.centerX + placement.width / 2
+                XCTAssertGreaterThanOrEqual(left, 8 - 0.01)
+                XCTAssertLessThanOrEqual(right, viewportWidth - 8 + 0.01)
+                XCTAssertEqual(left + placement.anchorX, trigger.midX,
+                               accuracy: 0.01, "Bubble base must stay on the original stationary pill")
+                XCTAssertGreaterThanOrEqual(placement.centerY - placement.height / 2,
+                                            29.9, "Don't clip into the status bar")
+            }
+        }
+    }
+
     func testNominalToolWidthMatchesActualPencilKitConfiguration() {
         let store = CanvasStore()
         store.tool = .pen
