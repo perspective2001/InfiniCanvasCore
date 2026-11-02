@@ -236,6 +236,16 @@ final class CanvasStore: ObservableObject {
         return native.width * view.zoomScale
     }
 
+    // Use native PencilKit for all supported sizes: it's lower latency.
+    // Only engage an alternative Pencil-only path when the native tool
+    // rejects the requested on-screen width by a visible amount.
+    var needsScreenWidthInkOverlay: Bool {
+        guard let view = canvas, view.tool is PKInkingTool,
+              tool == .pen || tool == .pencil || (tool == .marker && !fixedHighlighter),
+              let accepted = acceptedNativeScreenNibWidth else { return false }
+        return abs(accepted - selectedScreenNibWidth) > 0.5
+    }
+
     func setSelectedScreenNibWidth(_ screenPoints: CGFloat) {
         guard tool != .capture, screenPoints.isFinite else { return }
         selectedScreenWidths[tool] = max(0.4, min(500, screenPoints))
@@ -402,7 +412,8 @@ final class CanvasStore: ObservableObject {
     }
 
     private func configureNavigationRecognizers(_ view: PKCanvasView) {
-        let coveredByOverlay = tool == .capture || (tool == .marker && fixedHighlighter)
+        let coveredByOverlay = tool == .capture ||
+            (tool == .marker && fixedHighlighter) || needsScreenWidthInkOverlay
         view.panGestureRecognizer.isEnabled = !coveredByOverlay
         view.pinchGestureRecognizer?.isEnabled = !coveredByOverlay
     }
@@ -420,7 +431,6 @@ final class CanvasStore: ObservableObject {
 
     func updateTool() {
         guard let view = canvas else { return }
-        configureNavigationRecognizers(view)
         switch tool {
         case .pen:
             let inkType: PKInkingTool.InkType
@@ -438,6 +448,9 @@ final class CanvasStore: ObservableObject {
             view.tool = PKEraserTool(eraserPrecision == .detail ? .bitmap : .vector, width: eraserWidth)
         case .capture: view.tool = PKLassoTool()
         }
+        // Decide the gesture owner from the NEW native tool's accepted width,
+        // not from the previous frame's pen or lasso configuration.
+        configureNavigationRecognizers(view)
     }
 
     // MARK: - Coordinate conversions for all overlay PencilKit interactions
@@ -510,6 +523,66 @@ final class CanvasStore: ObservableObject {
         isSaved = false
         scheduleSave()
         status = "Vertical marker saved as editable ink"
+    }
+
+    // Direct PKStrokePoint dimensions bypass PKInkingTool's base-nib clamp.
+    // The user's selected size is defined in *screen* points; writing data is
+    // stored in canvas coordinates, keeping source ink editable at any zoom.
+    // Pressure and Pencil azimuth/altitude are captured, not discarded.
+    func commitScreenWidthStroke(_ samples: [ScreenWidthInkSample], from overlay: UIView) {
+        guard let view = canvas, !samples.isEmpty,
+              tool == .pen || tool == .pencil || (tool == .marker && !fixedHighlighter)
+        else { return }
+        let baseline = selectedScreenNibWidth / max(view.zoomScale, 0.045)
+        let inkType: PKInkingTool.InkType
+        switch tool {
+        case .pen:
+            switch penProfile {
+            case .fluid: inkType = .pen
+            case .fountain: inkType = .fountainPen
+            case .monoline: inkType = .monoline
+            }
+        case .pencil: inkType = .pencil
+        case .marker: inkType = .marker
+        default: return
+        }
+
+        let start = samples[0].time
+        var points: [PKStrokePoint] = []
+        for sample in samples {
+            guard let position = drawingPoint(sample.location, from: overlay, in: view) else { return }
+            // 0.5 force = exactly the selected screen nib. Force still varies
+            // the effective thickness; geometric zoom alone never changes it.
+            let pressure = min(1, max(0, sample.force))
+            let size = max(0.4, baseline * (0.70 + 0.60 * pressure))
+            points.append(PKStrokePoint(
+                location: position,
+                timeOffset: max(0, sample.time - start),
+                size: CGSize(width: size, height: size),
+                opacity: inkType == .marker ? 0.55 : 1,
+                force: pressure,
+                azimuth: sample.azimuth,
+                altitude: sample.altitude))
+        }
+        if points.count == 1, let first = points.first {
+            points.append(PKStrokePoint(
+                location: CGPoint(x: first.location.x + 0.01, y: first.location.y),
+                timeOffset: 1.0 / 120.0,
+                size: first.size, opacity: first.opacity, force: first.force,
+                azimuth: first.azimuth, altitude: first.altitude))
+        }
+        let color = inkType == .marker
+            ? inkColor.withAlphaComponent(0.52) : inkColor
+        let stroke = PKStroke(ink: PKInk(inkType, color: color),
+                              path: PKStrokePath(controlPoints: points, creationDate: Date()),
+                              transform: .identity, mask: nil)
+        checkpoint()
+        loading = true
+        view.drawing = PKDrawing(strokes: view.drawing.strokes + [stroke])
+        loading = false
+        isSaved = false
+        scheduleSave()
+        status = "Screen-width stroke saved as editable ink"
     }
 
     // Custom pinch is only used over full-screen Pencil overlays.
