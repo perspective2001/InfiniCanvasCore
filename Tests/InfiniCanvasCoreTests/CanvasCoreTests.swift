@@ -181,6 +181,60 @@ final class CanvasCoreTests: XCTestCase {
         window.isHidden = true
     }
 
+    func testNominalToolWidthMatchesActualPencilKitConfiguration() {
+        let store = CanvasStore()
+        store.tool = .pen
+        store.setSelectedScreenNibWidth(8)
+        XCTAssertEqual(store.nominalToolWidth, 8)
+        store.tool = .pencil
+        store.setSelectedScreenNibWidth(8)
+        XCTAssertEqual(store.nominalToolWidth, 8)
+        store.tool = .marker
+        store.fixedHighlighter = false
+        store.setSelectedScreenNibWidth(32)
+        XCTAssertEqual(store.nominalToolWidth, 32,
+                       "Preview matches native marker nib after applying its 4× width multiplier")
+        store.fixedHighlighter = true
+        XCTAssertEqual(store.nominalToolWidth, store.markerWidth,
+                       "Fixed vertical highlighter uses its own nib geometry")
+        store.tool = .eraser
+        store.setSelectedScreenNibWidth(46)
+        XCTAssertEqual(store.nominalToolWidth, 46)
+    }
+
+    func testStashedTabsReorderWithoutChangingCanvasInk() throws {
+        let store = CanvasStore()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
+        let canvas = PKCanvasView(frame: window.bounds)
+        canvas.minimumZoomScale = 0.045
+        canvas.maximumZoomScale = 10
+        canvas.contentSize = CGSize(width: 12000, height: 12000)
+        window.addSubview(canvas)
+        let overlay = UIView(frame: window.bounds)
+        window.addSubview(overlay)
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+        store.attach(canvas)
+        store.tool = .capture
+        canvas.drawing = PKDrawing(strokes: [makeStroke(.pen, x: 200, y: 200)])
+        let original = canvas.drawing.dataRepresentation()
+        let outline = [CGPoint(x: 145, y: 150), CGPoint(x: 265, y: 150),
+                       CGPoint(x: 265, y: 255), CGPoint(x: 145, y: 255)]
+        store.captureLasso(outline, from: overlay)
+        let first = try XCTUnwrap(store.latestClip)
+        XCTAssertTrue(store.stashSelectedInk())
+        store.captureLasso(outline, from: overlay)
+        let second = try XCTUnwrap(store.latestClip)
+        XCTAssertTrue(store.stashSelectedInk())
+        XCTAssertEqual(store.stashedClips.suffix(2).map(\.id), [first.id, second.id])
+        XCTAssertTrue(store.moveStashedClip(second.id, before: first.id))
+        XCTAssertEqual(store.stashedClips.suffix(2).map(\.id), [second.id, first.id])
+        XCTAssertFalse(store.moveStashedClip(second.id, before: second.id))
+        XCTAssertEqual(canvas.drawing.dataRepresentation(), original,
+                       "Reordering tabs must never modify source handwriting")
+        window.isHidden = true
+    }
+
     func testStashShrinksOnCornerApproachWithoutFalseFarAwayHit() {
         let target = CGRect(x: 780, y: 105, width: 150, height: 38)
         let far = CGRect(x: 100, y: 500, width: 120, height: 90)
@@ -195,7 +249,7 @@ final class CanvasCoreTests: XCTestCase {
         XCTAssertEqual(LassoTouchView.proximity(of: overlapping, to: .null), 0)
     }
 
-    func testBaseToolWidthIsPreservedAcrossZoomChanges() throws {
+    func testSelectedScreenWidthRemainsStableAtAllZoomLevels() throws {
         let store = CanvasStore()
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
         let canvas = PKCanvasView(frame: window.bounds)
@@ -207,15 +261,136 @@ final class CanvasCoreTests: XCTestCase {
         window.layoutIfNeeded()
         store.attach(canvas)
         store.tool = .pen
-        store.strokeWidth = 45
-        for zoom: CGFloat in [0.25, 0.5, 1, 2, 5] {
+        store.setSelectedScreenNibWidth(20)
+        for zoom: CGFloat in [0.5, 1, 2, 5] {
             store.zoomTo(zoom)
-            XCTAssertEqual(store.strokeWidth, 45,
-                           "Changing zoom must never silently overwrite the user's base pen width")
             XCTAssertEqual(store.zoom, zoom, accuracy: 0.02)
+            XCTAssertEqual(store.selectedScreenNibWidth, 20, accuracy: 0.02)
+            XCTAssertEqual(store.strokeWidth, 20 / zoom, accuracy: 0.03,
+                           "Draw 40 canvas pt at 50% zoom, 10 at 200%, for the same 20 screen pt")
+            XCTAssertEqual(store.nominalToolWidth * store.zoom, 20, accuracy: 0.04)
+            if let nativePen = canvas.tool as? PKInkingTool {
+                XCTAssertEqual(nativePen.width * store.zoom, 20, accuracy: 0.1,
+                               "Validate actual accepted PencilKit pen width, not just our model")
+            } else {
+                XCTFail("Expected native PKInkingTool for Pen")
+            }
+        }
+        // Existing content remains untouched by changing drawing tool size.
+        let original = PKDrawing(strokes: [makeStroke(.pen, x: 240, y: 300)])
+        canvas.drawing = original
+        store.zoomTo(2)
+        XCTAssertEqual(canvas.drawing.dataRepresentation(), original.dataRepresentation())
+        window.isHidden = true
+    }
+
+    func testMarkerPenPencilAndEraserNibScreenSizeAtZoom() throws {
+        let store = CanvasStore()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
+        let canvas = PKCanvasView(frame: window.bounds)
+        canvas.minimumZoomScale = 0.045
+        canvas.maximumZoomScale = 10
+        canvas.contentSize = CGSize(width: 12000, height: 12000)
+        window.addSubview(canvas)
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+        store.attach(canvas)
+
+        for tool in [CanvasTool.pen, .pencil, .marker, .eraser] {
+            store.tool = tool
+            if tool == .marker { store.fixedHighlighter = false }
+            store.setSelectedScreenNibWidth(12)
+            for zoom: CGFloat in [0.5, 1, 2] {
+                store.zoomTo(zoom)
+                XCTAssertEqual(store.selectedScreenNibWidth, 12, accuracy: 0.05)
+                XCTAssertEqual(store.nominalToolWidth * store.zoom, 12, accuracy: 0.05,
+                               "Tool \(tool.rawValue) at zoom \(zoom)")
+                if let native = canvas.tool as? PKInkingTool {
+                    XCTAssertEqual(native.width * store.zoom, 12, accuracy: 0.12,
+                                   "PencilKit accepted width for \(tool.rawValue) zoom \(zoom)")
+                }
+            }
         }
         window.isHidden = true
     }
+
+    func testRestSafeInsertedLinkCanBeTrashedAndRecoveredWithoutDeletingInk() throws {
+        let store = CanvasStore()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
+        let canvas = PKCanvasView(frame: window.bounds)
+        canvas.minimumZoomScale = 0.045
+        canvas.maximumZoomScale = 10
+        canvas.contentSize = CGSize(width: 12000, height: 12000)
+        window.addSubview(canvas)
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+        store.attach(canvas)
+        XCTAssertTrue(store.restSafe)
+
+        canvas.drawing = PKDrawing(strokes: [makeStroke(.pen, x: 180, y: 190)])
+        let original = canvas.drawing.dataRepresentation()
+        store.addTextNote("https://example.com/course/reading")
+        let note = try XCTUnwrap(store.activeTextNotes.last)
+        XCTAssertTrue(note.body.contains("https://"))
+
+        store.trashTextNote(note)
+        XCTAssertFalse(store.activeTextNotes.contains(where: { $0.id == note.id }))
+        XCTAssertTrue(store.discardedTextNotes.contains(where: { $0.id == note.id }))
+        XCTAssertEqual(canvas.drawing.dataRepresentation(), original,
+                       "Deleting an inserted link must not delete PencilKit ink")
+        let backupURL = try XCTUnwrap(store.exportCompleteBackup())
+        let backup = try JSONDecoder().decode(CompleteBackup.self,
+                                              from: Data(contentsOf: backupURL))
+        XCTAssertEqual(backup.index.textNotes?.first(where: { $0.id == note.id })?.isTrashed, true,
+                       "The soft-deleted note should survive backup/restart")
+        store.restoreTextNote(note)
+        XCTAssertTrue(store.activeTextNotes.contains(where: { $0.id == note.id }))
+        XCTAssertEqual(canvas.drawing.dataRepresentation(), original)
+        window.isHidden = true
+    }
+
+    func testFingerPanningRemainsAvailableAfterRestSafeAndOverlayToolSwitches() {
+        let store = CanvasStore()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
+        let canvas = PKCanvasView(frame: window.bounds)
+        canvas.minimumZoomScale = 0.045
+        canvas.maximumZoomScale = 10
+        canvas.contentSize = CGSize(width: 12000, height: 12000)
+        window.addSubview(canvas)
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+        store.attach(canvas)
+
+        XCTAssertTrue(canvas.isScrollEnabled)
+        XCTAssertFalse(canvas.isDirectionalLockEnabled)
+        XCTAssertTrue(canvas.panGestureRecognizer.isEnabled)
+        store.restSafe = false
+        store.restSafe = true
+        XCTAssertTrue(canvas.panGestureRecognizer.isEnabled)
+        XCTAssertFalse(canvas.isDirectionalLockEnabled)
+        store.tool = .capture
+        XCTAssertFalse(canvas.panGestureRecognizer.isEnabled,
+                       "Lasso overlay temporarily owns finger navigation")
+        store.tool = .marker
+        store.fixedHighlighter = true
+        XCTAssertFalse(canvas.panGestureRecognizer.isEnabled,
+                       "Fixed marker overlay temporarily owns finger navigation")
+        store.tool = .pen
+        XCTAssertTrue(canvas.panGestureRecognizer.isEnabled,
+                      "Switching back to normal pen restores native finger navigation")
+
+        for overlay in [LassoTouchView(frame: window.bounds),
+                        FixedNibTouchView(frame: window.bounds)] as [UIView] {
+            let pan = try? XCTUnwrap(overlay.gestureRecognizers?.compactMap {
+                $0 as? UIPanGestureRecognizer
+            }.first)
+            XCTAssertEqual(pan?.minimumNumberOfTouches, 1)
+            XCTAssertEqual(pan?.maximumNumberOfTouches, 2,
+                           "Two fingers must not cancel navigation over full-screen overlays")
+        }
+        window.isHidden = true
+    }
+
 
     func testLassoMoveCommitsAtCorrectZoomThenCanBeSelectedAgain() throws {
         let store = CanvasStore()
