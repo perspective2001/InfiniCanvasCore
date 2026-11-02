@@ -103,8 +103,17 @@ final class ScreenWidthInkTouchView: UIView, UIGestureRecognizerDelegate {
     private func render() {
         let path = UIBezierPath()
         for (index, sample) in samples.enumerated() {
-            if index == 0 { path.move(to: sample.location) }
-            else { path.addLine(to: sample.location) }
+            if index == 0 {
+                path.move(to: sample.location)
+                // A stationary Pencil must display a real round dot from the
+                // FIRST touch, not an invisible move-only path until lift.
+                if samples.count == 1 {
+                    path.addLine(to: CGPoint(x: sample.location.x + 0.01,
+                                             y: sample.location.y + 0.01))
+                }
+            } else {
+                path.addLine(to: sample.location)
+            }
         }
         liveLine.path = path.cgPath
         liveLine.lineWidth = max(0.4, screenWidth)
