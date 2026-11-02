@@ -223,6 +223,19 @@ final class CanvasStore: ObservableObject {
         selectedScreenWidths[tool] ?? nominalToolWidth * max(zoom, 0.045)
     }
 
+    // Read the configured width back from PencilKit. Some brush types clamp
+    // extreme sizes instead of honoring the requested value. This is a
+    // NOMINAL nib measurement (Pencil force/tilt still alters the rendered edge).
+    // Returning nil for custom tools avoids claiming that they share native
+    // PKInkingTool limits. The target selectedScreenNibWidth is preserved
+    // separately so a future high-width renderer can honor it.
+    var acceptedNativeScreenNibWidth: CGFloat? {
+        guard let view = canvas, let native = view.tool as? PKInkingTool else {
+            return nil
+        }
+        return native.width * view.zoomScale
+    }
+
     func setSelectedScreenNibWidth(_ screenPoints: CGFloat) {
         guard tool != .capture, screenPoints.isFinite else { return }
         selectedScreenWidths[tool] = max(0.4, min(500, screenPoints))
