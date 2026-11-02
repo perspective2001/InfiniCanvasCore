@@ -270,6 +270,40 @@ final class CanvasCoreTests: XCTestCase {
         XCTAssertEqual(LassoTouchView.proximity(of: overlapping, to: .null), 0)
     }
 
+    private func assertScreenWidthIsActuallyRepresented(
+        _ store: CanvasStore, canvas: PKCanvasView, overlay: UIView,
+        desired: CGFloat, file: StaticString = #filePath, line: UInt = #line
+    ) {
+        if store.needsScreenWidthInkOverlay {
+            // Native ink clamped. The custom path must store the user-facing
+            // screen-space size, not just change a UI number.
+            let before = canvas.drawing.strokes.count
+            let sampleTime = Date().timeIntervalSince1970
+            let points = [
+                ScreenWidthInkSample(location: CGPoint(x: 300, y: 325),
+                                     time: sampleTime, force: 0.5,
+                                     azimuth: 0, altitude: .pi / 2),
+                ScreenWidthInkSample(location: CGPoint(x: 400, y: 325),
+                                     time: sampleTime + 0.01, force: 0.5,
+                                     azimuth: 0, altitude: .pi / 2)
+            ]
+            store.commitScreenWidthStroke(points, from: overlay)
+            XCTAssertEqual(canvas.drawing.strokes.count, before + 1, file: file, line: line)
+            guard let stroke = canvas.drawing.strokes.last, stroke.path.count > 0 else {
+                XCTFail("PencilKit did not preserve the custom editable stroke", file: file, line: line)
+                return
+            }
+            XCTAssertEqual(stroke.path[0].size.width * canvas.zoomScale,
+                           desired, accuracy: max(0.3, desired * 0.02),
+                           "Actual editable PencilKit point size must equal requested screen size",
+                           file: file, line: line)
+        } else if let native = canvas.tool as? PKInkingTool {
+            XCTAssertEqual(native.width * canvas.zoomScale, desired, accuracy: 0.12,
+                           "Use native low-latency PencilKit when its actual accepted size works",
+                           file: file, line: line)
+        }
+    }
+
     func testSelectedScreenWidthRemainsStableAtAllZoomLevels() throws {
         let store = CanvasStore()
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
@@ -278,26 +312,22 @@ final class CanvasCoreTests: XCTestCase {
         canvas.maximumZoomScale = 10
         canvas.contentSize = CGSize(width: 12000, height: 12000)
         window.addSubview(canvas)
+        let overlay = UIView(frame: window.bounds)
+        window.addSubview(overlay)
         window.makeKeyAndVisible()
         window.layoutIfNeeded()
         store.attach(canvas)
         store.tool = .pen
         store.setSelectedScreenNibWidth(20)
-        for zoom: CGFloat in [0.5, 1, 2, 5] {
+        for zoom: CGFloat in [0.102, 0.5, 1, 2, 5] {
             store.zoomTo(zoom)
             XCTAssertEqual(store.zoom, zoom, accuracy: 0.02)
             XCTAssertEqual(store.selectedScreenNibWidth, 20, accuracy: 0.02)
-            XCTAssertEqual(store.strokeWidth, 20 / zoom, accuracy: 0.03,
-                           "Draw 40 canvas pt at 50% zoom, 10 at 200%, for the same 20 screen pt")
-            XCTAssertEqual(store.nominalToolWidth * store.zoom, 20, accuracy: 0.04)
-            if let nativePen = canvas.tool as? PKInkingTool {
-                XCTAssertEqual(nativePen.width * store.zoom, 20, accuracy: 0.1,
-                               "Validate actual accepted PencilKit pen width, not just our model")
-            } else {
-                XCTFail("Expected native PKInkingTool for Pen")
-            }
+            XCTAssertEqual(store.strokeWidth, 20 / zoom, accuracy: 0.03)
+            assertScreenWidthIsActuallyRepresented(
+                store, canvas: canvas, overlay: overlay, desired: 20)
         }
-        // Existing content remains untouched by changing drawing tool size.
+        // Changing brush size never rescales or loses existing strokes.
         let original = PKDrawing(strokes: [makeStroke(.pen, x: 240, y: 300)])
         canvas.drawing = original
         store.zoomTo(2)
@@ -313,6 +343,8 @@ final class CanvasCoreTests: XCTestCase {
         canvas.maximumZoomScale = 10
         canvas.contentSize = CGSize(width: 12000, height: 12000)
         window.addSubview(canvas)
+        let overlay = UIView(frame: window.bounds)
+        window.addSubview(overlay)
         window.makeKeyAndVisible()
         window.layoutIfNeeded()
         store.attach(canvas)
@@ -324,13 +356,56 @@ final class CanvasCoreTests: XCTestCase {
             for zoom: CGFloat in [0.5, 1, 2] {
                 store.zoomTo(zoom)
                 XCTAssertEqual(store.selectedScreenNibWidth, 12, accuracy: 0.05)
-                XCTAssertEqual(store.nominalToolWidth * store.zoom, 12, accuracy: 0.05,
-                               "Tool \(tool.rawValue) at zoom \(zoom)")
-                if let native = canvas.tool as? PKInkingTool {
-                    XCTAssertEqual(native.width * store.zoom, 12, accuracy: 0.12,
-                                   "PencilKit accepted width for \(tool.rawValue) zoom \(zoom)")
+                XCTAssertEqual(store.nominalToolWidth * store.zoom, 12, accuracy: 0.05)
+                if tool != .eraser {
+                    assertScreenWidthIsActuallyRepresented(
+                        store, canvas: canvas, overlay: overlay, desired: 12)
+                } else {
+                    XCTAssertTrue(canvas.tool is PKEraserTool,
+                                  "Existing native eraser remains intact")
                 }
             }
+        }
+        window.isHidden = true
+    }
+
+    func testExtremeScreenWidthUsesEditablePressureSensitivePKStroke() throws {
+        let store = CanvasStore()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
+        let canvas = PKCanvasView(frame: window.bounds)
+        canvas.minimumZoomScale = 0.045
+        canvas.maximumZoomScale = 10
+        canvas.contentSize = CGSize(width: 12000, height: 12000)
+        window.addSubview(canvas)
+        let overlay = UIView(frame: window.bounds)
+        window.addSubview(overlay)
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+        store.attach(canvas)
+        store.tool = .pen
+        store.setSelectedScreenNibWidth(127)
+        for zoom: CGFloat in [0.102, 0.5, 1, 2] {
+            store.zoomTo(zoom)
+            XCTAssertTrue(store.needsScreenWidthInkOverlay,
+                          "Oversized nib must select the editable width renderer")
+            let before = canvas.drawing.strokes.count
+            let time = Date().timeIntervalSince1970
+            store.commitScreenWidthStroke([
+                ScreenWidthInkSample(location: CGPoint(x: 300, y: 300),
+                    time: time, force: 0.2, azimuth: 0, altitude: .pi / 2),
+                ScreenWidthInkSample(location: CGPoint(x: 420, y: 300),
+                    time: time + 0.015, force: 0.8, azimuth: 0, altitude: .pi / 3)
+            ], from: overlay)
+            XCTAssertEqual(canvas.drawing.strokes.count, before + 1)
+            let stroke = try XCTUnwrap(canvas.drawing.strokes.last)
+            XCTAssertGreaterThan(stroke.path[1].size.width, stroke.path[0].size.width,
+                                 "Force should modify effective nib width")
+            XCTAssertEqual(stroke.path[0].size.width * zoom,
+                           127 * (0.70 + 0.60 * 0.2), accuracy: 2)
+            XCTAssertEqual(stroke.path[1].size.width * zoom,
+                           127 * (0.70 + 0.60 * 0.8), accuracy: 2)
+            XCTAssertGreaterThan(stroke.renderBounds.height * zoom, 20,
+                                 "Saved PencilKit ink should have visible thickness")
         }
         window.isHidden = true
     }
