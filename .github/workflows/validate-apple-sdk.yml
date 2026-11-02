@@ -62,16 +62,10 @@ jobs:
         run: |
           set -euo pipefail
           xcodebuild -scheme InfiniCanvasCore -destination 'generic/platform=iOS Simulator' -derivedDataPath /tmp/InfiniCore26 CODE_SIGNING_ALLOWED=NO build
-      - name: Test actual SwiftUI root, PencilKit and persistence
-        timeout-minutes: 9
-        run: |
-          set -euo pipefail
-          SIMULATOR_ID="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; all=[x for a in d.values() for x in a if x.get("isAvailable",True)]; pick=next((x for x in all if "iPad" in x["name"]), next((x for x in all if "iPhone" in x["name"]), None)); print(pick["udid"] if pick else "")')"
-          if [ -z "$SIMULATOR_ID" ]; then echo "No iOS Simulator" >&2; exit 1; fi
-          xcodebuild -scheme InfiniCanvasCore -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath /tmp/InfiniCoreTests26 CODE_SIGNING_ALLOWED=NO test
-      # The iOS 26 runner above already demonstrated a functioning iPad
-      # simulator by running actual PencilKit tests. Use THAT simulator for
-      # compositor screenshots; the custom Xcode27 host runner stalled on boot.
+      # Capture on a fresh simulator FIRST. Testing PencilKit before capture
+      # sometimes leaves CoreSimulator unresponsive during simctl bootstatus;
+      # previous runs timed out at both 55s and 150s. Never accept an absent
+      # PNG as visual evidence.
       - name: Build actual native host and capture real iPad screen (same tested SDK)
         # Capture candidate visuals even when a separate width assertion fails.
         # CI remains RED; screenshots diagnose failures, never bypass them.
@@ -198,6 +192,16 @@ jobs:
           path: ${{ runner.temp }}/InfiniVisualEvidence/
           retention-days: 14
           if-no-files-found: warn
+
+      - name: Test actual SwiftUI root, PencilKit and persistence
+        # Still test native PencilKit even if visual capture fails.
+        if: always()
+        timeout-minutes: 9
+        run: |
+          set -euo pipefail
+          SIMULATOR_ID="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; all=[x for a in d.values() for x in a if x.get("isAvailable",True)]; pick=next((x for x in all if "iPad" in x["name"]), next((x for x in all if "iPhone" in x["name"]), None)); print(pick["udid"] if pick else "")')"
+          if [ -z "$SIMULATOR_ID" ]; then echo "No iOS Simulator" >&2; exit 1; fi
+          xcodebuild -scheme InfiniCanvasCore -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath /tmp/InfiniCoreTests26 CODE_SIGNING_ALLOWED=NO test
 
 
   modern-sdk-and-host:
