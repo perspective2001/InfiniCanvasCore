@@ -50,7 +50,7 @@ final class FixedNibTouchView: UIView, UIGestureRecognizerDelegate {
         addGestureRecognizer(pinch)
         let pan = UIPanGestureRecognizer(target: self, action: #selector(panned(_:)))
         pan.minimumNumberOfTouches = 1
-        pan.maximumNumberOfTouches = 1
+        pan.maximumNumberOfTouches = 2
         pan.delegate = self
         pan.cancelsTouchesInView = false
         addGestureRecognizer(pan)
@@ -59,7 +59,9 @@ final class FixedNibTouchView: UIView, UIGestureRecognizerDelegate {
     required init?(coder: NSCoder) { fatalError("Storyboards are not used") }
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-        touch.type == .direct && touch.majorRadius < 27
+        // Keep pencil-only drawing while avoiding arbitrary rejection of
+        // broad but intentional fingertip contacts on gesture overlays.
+        touch.type == .direct && touch.majorRadius < 38
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
