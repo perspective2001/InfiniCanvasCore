@@ -50,6 +50,7 @@ struct ContentView: View {
     @State private var showFocusChoices = false
     @State private var editingAreaLabels = false
     @State private var editingMiniClips = false
+    @State private var editingInsertedNotes = false
 
     private let teal = Color(red: 0.07, green: 0.40, blue: 0.43)
     private let swatches: [(String, UIColor)] = [
@@ -85,8 +86,10 @@ struct ContentView: View {
             }
             if showAreaPins && store.zoom <= 0.55 && !focusMode && store.tool != .capture {
                 semanticOverview
+                    .allowsHitTesting(!store.restSafe || editingAreaLabels)
             } else if showAreaPins && store.zoom <= 0.85 && !focusMode && store.tool != .capture {
                 areaPins
+                    .allowsHitTesting(!store.restSafe || editingAreaLabels)
             }
             if !paperOnly {
                 VStack(spacing: 0) {
@@ -451,10 +454,11 @@ struct ContentView: View {
     // Nothing here deletes PencilKit ink; all entries remain recoverable.
     private var trashMenu: some View {
         Menu {
-            if editingAreaLabels || editingMiniClips {
+            if editingAreaLabels || editingMiniClips || editingInsertedNotes {
                 Button("Finish editing", systemImage: "checkmark") {
                     editingAreaLabels = false
                     editingMiniClips = false
+                    editingInsertedNotes = false
                 }
             }
             Button("Show × on canvas categories", systemImage: "rectangle.badge.xmark") {
@@ -462,6 +466,17 @@ struct ContentView: View {
             }
             Button("Show × on saved thumbnails", systemImage: "rectangle.stack.badge.minus") {
                 editingMiniClips = true
+            }
+            Button("Show × on inserted text/links", systemImage: "text.badge.xmark") {
+                editingInsertedNotes = true
+            }
+            Menu("Remove inserted text or link", systemImage: "text.badge.minus") {
+                if store.activeTextNotes.isEmpty { Text("No inserted text or links") }
+                ForEach(store.activeTextNotes) { note in
+                    Button(role: .destructive) { store.trashTextNote(note) } label: {
+                        Label(String(note.body.prefix(46)), systemImage: "trash")
+                    }
+                }
             }
             Menu("Remove canvas categorization", systemImage: "mappin.slash") {
                 let labeled = store.areas.filter { $0.isTrashed != true }
@@ -489,13 +504,18 @@ struct ContentView: View {
                     }
                 }
             }
-            if !store.discardedAreas.isEmpty || !store.discardedClips.isEmpty {
+            if !store.discardedAreas.isEmpty || !store.discardedClips.isEmpty || !store.discardedTextNotes.isEmpty {
                 Menu("Restore from Trash", systemImage: "arrow.uturn.backward") {
                     ForEach(store.discardedAreas) { area in
                         Button("Restore label · \(area.title)") { store.restoreArea(area) }
                     }
                     ForEach(store.discardedClips) { clip in
                         Button("Restore clip · \(clip.title)") { store.restoreClip(clip) }
+                    }
+                    ForEach(store.discardedTextNotes) { note in
+                        Button("Restore text · \(String(note.body.prefix(46)))") {
+                            store.restoreTextNote(note)
+                        }
                     }
                 }
             }
@@ -1195,6 +1215,7 @@ struct ContentView: View {
                             .padding(10)
                             .background(Color.white.opacity(0.92), in: RoundedRectangle(cornerRadius: 9))
                             .overlay(RoundedRectangle(cornerRadius: 9).stroke(.teal.opacity(0.25)))
+                            .contentShape(RoundedRectangle(cornerRadius: 9))
                             .onTapGesture { openTextEditor(note) }
                             .contextMenu {
                                 Button("Edit", systemImage: "pencil") { openTextEditor(note) }
@@ -1202,9 +1223,30 @@ struct ContentView: View {
                                     Label("Move to Trash", systemImage: "trash")
                                 }
                             }
-                            .gesture(DragGesture(minimumDistance: 8).onEnded { value in
-                                store.moveTextNote(note, delta: value.translation)
-                            })
+                            // A normal text-card drag competes with scrolling.
+                            // Allow moving text only in explicitly selected edit mode.
+                            .simultaneousGesture(
+                                DragGesture(minimumDistance: 12)
+                                    .onEnded { value in
+                                        if editingInsertedNotes {
+                                            store.moveTextNote(note, delta: value.translation)
+                                        }
+                                    },
+                                including: editingInsertedNotes ? .gesture : .none
+                            )
+                            .overlay(alignment: .topTrailing) {
+                                if editingInsertedNotes {
+                                    Button(role: .destructive) { store.trashTextNote(note) } label: {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .font(.system(size: 22))
+                                            .foregroundStyle(.red)
+                                            .background(.white, in: Circle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .offset(x: 10, y: -10)
+                                    .accessibilityLabel("Delete inserted text or link")
+                                }
+                            }
                             .position(x: p.x, y: p.y)
                     }
                 }
