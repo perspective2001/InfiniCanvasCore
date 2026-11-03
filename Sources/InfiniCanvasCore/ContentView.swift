@@ -1119,6 +1119,10 @@ struct ContentView: View {
         let wasClamped = !customWidth &&
             abs((store.acceptedNativeScreenNibWidth ?? visibleSize) - visibleSize) > 0.5
         let bubble = LiquidSizeBubble(anchorX: anchorX)
+        // Keep the actual round stroke TIP inside the rounded glass dome.
+        // Earlier native pixels showed a 127pt oval bleeding across the
+        // color wheel even though the glass itself was correctly bounded.
+        let contentTop = min(31, max(12, 12 + measuredWidth * 0.14))
 
         return ZStack(alignment: .bottom) {
             if #available(iOS 26.0, *) {
@@ -1138,7 +1142,11 @@ struct ContentView: View {
                     .foregroundStyle(selectedInk)
                     .lineLimit(1)
                 GeometryReader { geo in
-                    LiquidPressureStroke(tipWidth: measuredWidth)
+                    // The outside glass moves left when close to the screen
+                    // edge, but the thin tail of the ink stays connected to
+                    // the ORIGINAL, stationary width-control pill.
+                    let tailX = anchorX - (geo.size.width / 2 + 11)
+                    LiquidPressureStroke(tipWidth: measuredWidth, baseOffset: tailX)
                         .fill(selectedInk.opacity(inkAlpha))
                         .frame(width: geo.size.width, height: geo.size.height)
                 }
@@ -1151,9 +1159,12 @@ struct ContentView: View {
                 }
             }
             .padding(.horizontal, 11)
-            .padding(.top, 12)
+            .padding(.top, contentTop)
             .padding(.bottom, 11)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Critical: no text or ink may render outside the actual glass.
+            // This is a native shape mask, not a fake size indicator.
+            .clipShape(bubble)
         }
         .animation(.interactiveSpring(response: 0.23, dampingFraction: 0.80),
                    value: measuredWidth)
@@ -1700,43 +1711,36 @@ private struct LiquidSizeBubble: InsettableShape {
         guard right > left + 12, bottom > top + 12 else { return Path() }
 
         let center = (left + right) / 2
-        let bodyRadius = min((right - left) / 2, 60)
+        let bodyRadius = min((right - left) / 2, 80)
         let bodyLeft = center - bodyRadius
         let bodyRight = center + bodyRadius
-        // A real rounded dome instead of the previous horizontal rectangular
-        // cap; rounded control flow transitions into a narrower lower neck.
         let capBottom = top + min(bodyRadius * 0.96, (bottom - top) * 0.51)
-        let neckY = bottom - min(34, (bottom - top) * 0.29)
         let pin = min(right - 28, max(left + 28, anchorX))
-        let neckHalf: CGFloat = min(22, bodyRadius * 0.43)
         let lowerHalf: CGFloat = min(32, bodyRadius * 0.66)
+
+        // A monotonic, soft widening from the original horizontal pill up
+        // into a round dome. Removing the old narrowed waist eliminates the
+        // 'mushroom/funnel' notch visible in earlier simulator captures.
         var path = Path()
         path.move(to: CGPoint(x: pin - lowerHalf, y: bottom - 6))
-        path.addCurve(to: CGPoint(x: pin - neckHalf, y: neckY),
-                      control1: CGPoint(x: pin - lowerHalf, y: bottom - 15),
-                      control2: CGPoint(x: pin - neckHalf, y: neckY + 11))
         path.addCurve(to: CGPoint(x: bodyLeft, y: capBottom),
-                      control1: CGPoint(x: pin - neckHalf - 2, y: neckY - 24),
-                      control2: CGPoint(x: bodyLeft, y: capBottom + 18))
+                      control1: CGPoint(x: pin - lowerHalf - 7, y: bottom - 50),
+                      control2: CGPoint(x: bodyLeft, y: capBottom + 28))
         path.addCurve(to: CGPoint(x: center, y: top),
                       control1: CGPoint(x: bodyLeft, y: top + bodyRadius * 0.48),
                       control2: CGPoint(x: center - bodyRadius * 0.59, y: top))
         path.addCurve(to: CGPoint(x: bodyRight, y: capBottom),
                       control1: CGPoint(x: center + bodyRadius * 0.59, y: top),
                       control2: CGPoint(x: bodyRight, y: top + bodyRadius * 0.48))
-        path.addCurve(to: CGPoint(x: pin + neckHalf, y: neckY),
-                      control1: CGPoint(x: bodyRight, y: capBottom + 18),
-                      control2: CGPoint(x: pin + neckHalf + 2, y: neckY - 24))
         path.addCurve(to: CGPoint(x: pin + lowerHalf, y: bottom - 6),
-                      control1: CGPoint(x: pin + neckHalf, y: neckY + 11),
-                      control2: CGPoint(x: pin + lowerHalf, y: bottom - 15))
+                      control1: CGPoint(x: bodyRight, y: capBottom + 28),
+                      control2: CGPoint(x: pin + lowerHalf + 7, y: bottom - 50))
         path.addQuadCurve(to: CGPoint(x: pin - lowerHalf, y: bottom - 6),
                           control: CGPoint(x: pin, y: bottom + 3))
         path.closeSubpath()
         return path
     }
 }
-
 
 // Smooth pressure trail with a rounded tip; no triangular edge or wedge.
 // The value comes from the measured native nib, not the requested target.
@@ -1746,34 +1750,38 @@ private struct LiquidSizeBubble: InsettableShape {
 // Geometry is in SCREEN points and is independent of canvas zoom.
 struct LiquidPressureStroke: Shape {
     var tipWidth: CGFloat
-    var animatableData: CGFloat {
-        get { tipWidth }
-        set { tipWidth = newValue }
+    var baseOffset: CGFloat = 0
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(tipWidth, baseOffset) }
+        set { tipWidth = newValue.first; baseOffset = newValue.second }
     }
 
     func path(in rect: CGRect) -> Path {
         guard rect.height > 3, rect.width > 3 else { return Path() }
-        let centerX = rect.midX
+        let mid = rect.midX
+        let startX = mid + baseOffset
         let half = min(rect.width / 2 - 2, max(0.6, tipWidth / 2))
         let topRound = min(15, max(1.3, half * 0.32))
         let endY = rect.minY + topRound + 1
         let startY = rect.maxY - 2
         let available = max(1, startY - endY)
-        let steps = max(24, min(75, Int(available / 1.8)))
+        let steps = max(28, min(90, Int(available / 1.55)))
         var shape = Path()
         for i in 0...steps {
             let fraction = CGFloat(i) / CGFloat(steps)
-            // Smooth radial expansion: zero slope at both ends, so
-            // the mark grows organically rather than forming a hard wedge.
-            let ease = fraction * fraction * (3 - 2 * fraction)
+            // Maintain a thin real ink trail and allow its upper end to
+            // thicken progressively with the upward Pencil-size gesture.
+            // Avoid the old giant triangular mass at intermediate sizes.
+            let ramp = max(0, (fraction - 0.12) / 0.88)
+            let ease = ramp * ramp * ramp
             let radius = 0.9 + (half - 0.9) * ease
-            let verticalRadius = min(topRound, max(1.1, radius * 0.34))
+            let verticalRadius = min(topRound, max(1.1, radius * 0.32))
+            let centerEase = fraction * fraction * (3 - 2 * fraction)
+            let centerX = startX + (mid - startX) * centerEase
             let y = startY - available * fraction
             shape.addEllipse(in: CGRect(
-                x: centerX - radius,
-                y: y - verticalRadius,
-                width: radius * 2,
-                height: verticalRadius * 2))
+                x: centerX - radius, y: y - verticalRadius,
+                width: radius * 2, height: verticalRadius * 2))
         }
         return shape
     }
