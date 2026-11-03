@@ -415,6 +415,91 @@ final class CanvasCoreTests: XCTestCase {
                              "Sample-to-sample sweep should cover the entire moving stroke")
     }
 
+    func testActualPencilKitRasterWidthAtDeepAndNormalZoom() throws {
+        // Render the REAL PKDrawing using Apple's rasterizer, not merely the
+        // stored PKStrokePoint nominal dimensions. Preserve both full-size
+        // raster results as named XCTest attachments for independent review.
+        let store = CanvasStore()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
+        let canvas = PKCanvasView(frame: window.bounds)
+        canvas.minimumZoomScale = 0.045
+        canvas.maximumZoomScale = 10
+        canvas.contentSize = CGSize(width: 12000, height: 12000)
+        window.addSubview(canvas)
+        let overlay = UIView(frame: window.bounds)
+        window.addSubview(overlay)
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+        store.attach(canvas)
+        store.tool = .pen
+        store.inkColor = UIColor(red: 0.03, green: 0.36, blue: 0.39, alpha: 1)
+        for zoom: CGFloat in [0.102, 1.0] {
+            canvas.drawing = PKDrawing()
+            store.zoomTo(zoom)
+            store.setSelectedScreenNibWidth(127)
+            let time = Date().timeIntervalSince1970
+            store.commitScreenWidthStroke([
+                ScreenWidthInkSample(location: CGPoint(x: 300, y: 325),
+                    time: time, force: 0.5, azimuth: 0, altitude: .pi / 2),
+                ScreenWidthInkSample(location: CGPoint(x: 440, y: 325),
+                    time: time + 0.025, force: 0.5,
+                    azimuth: 0, altitude: .pi / 2)
+            ], from: overlay)
+            let stroke = try XCTUnwrap(canvas.drawing.strokes.last)
+            XCTAssertEqual(stroke.path.count, 2)
+            let midpoint = CGPoint(
+                x: (stroke.path[0].location.x + stroke.path[1].location.x) / 2,
+                y: (stroke.path[0].location.y + stroke.path[1].location.y) / 2)
+            let worldRect = CGRect(x: midpoint.x - 110 / zoom,
+                                   y: midpoint.y - 110 / zoom,
+                                   width: 220 / zoom, height: 220 / zoom)
+            let raster = canvas.drawing.image(from: worldRect, scale: zoom)
+
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            format.opaque = true
+            let preview = UIGraphicsImageRenderer(
+                size: CGSize(width: 220, height: 220), format: format
+            ).image { context in
+                UIColor.white.setFill()
+                context.fill(CGRect(x: 0, y: 0, width: 220, height: 220))
+                raster.draw(in: CGRect(x: 0, y: 0, width: 220, height: 220))
+            }
+            let screenshot = XCTAttachment(image: preview)
+            screenshot.name = zoom < 0.2
+                ? "Real-PencilKit-raster-127pt-zoom-10-percent"
+                : "Real-PencilKit-raster-127pt-zoom-100-percent"
+            screenshot.lifetime = .keepAlways
+            add(screenshot)
+
+            guard let cg = preview.cgImage,
+                  let data = cg.dataProvider?.data,
+                  let bytes = CFDataGetBytePtr(data) else {
+                XCTFail("Real PKDrawing rasterizer returned no inspectable bytes")
+                continue
+            }
+            // At the centre of the horizontal pen path, any non-white pixel
+            // belongs to the actual rendered ink (not an interface mock).
+            // The renderer is white-backed solely for deterministic sampling.
+            let bpp = cg.bitsPerPixel / 8
+            XCTAssertGreaterThanOrEqual(bpp, 3)
+            let sampleX = cg.width / 2
+            var colouredRows = 0
+            for y in 0..<cg.height {
+                let index = y * cg.bytesPerRow + sampleX * bpp
+                let darkness = Int(bytes[index]) + Int(bytes[index + 1])
+                               + Int(bytes[index + 2])
+                if darkness < 730 { colouredRows += 1 }
+            }
+            print("ACTUAL_PENCILKIT_RASTER zoom=\\(zoom) colouredRows=\\(colouredRows) desired=127")
+            XCTAssertGreaterThan(colouredRows, 20,
+                                 "A hairline stroke is not an acceptable oversized nib")
+            XCTAssertEqual(CGFloat(colouredRows), 127, accuracy: 15,
+                           "Measured REAL PencilKit raster should match 127 screen pt")
+        }
+        window.isHidden = true
+    }
+
     func testExtremeScreenWidthUsesEditablePressureSensitivePKStroke() throws {
         let store = CanvasStore()
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
