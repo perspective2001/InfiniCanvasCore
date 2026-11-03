@@ -1690,7 +1690,7 @@ struct WidthMorphPlacement {
     }
 }
 
-private struct LiquidSizeBubble: InsettableShape {
+struct LiquidSizeBubble: InsettableShape {
     var anchorX: CGFloat
     var insetAmount: CGFloat = 0
     var animatableData: CGFloat {
