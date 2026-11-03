@@ -1650,7 +1650,11 @@ private struct LiquidSizeBubble: InsettableShape {
 
 // Smooth pressure trail with a rounded tip; no triangular edge or wedge.
 // The value comes from the measured native nib, not the requested target.
-private struct LiquidPressureStroke: Shape {
+// A live-looking rising brush mark, not a triangular 'funnel' silhouette.
+// A sequence of smoothly widening, rounded pressure stamps makes the upper
+// endpoint full nib width without a sharp triangular tip or rigid polygon.
+// Geometry is in SCREEN points and is independent of canvas zoom.
+struct LiquidPressureStroke: Shape {
     var tipWidth: CGFloat
     var animatableData: CGFloat {
         get { tipWidth }
@@ -1658,26 +1662,29 @@ private struct LiquidPressureStroke: Shape {
     }
 
     func path(in rect: CGRect) -> Path {
-        guard rect.height > 1, rect.width > 2 else { return Path() }
-        let center = rect.midX
-        let half = min((rect.width - 6) / 2, max(0.8, tipWidth / 2))
-        let tipDepth = min(half * 0.6, 17, rect.height * 0.23)
-        let tipY = rect.minY + tipDepth + 3
-        let baseY = rect.maxY - 2
-        let height = baseY - tipY
-        var path = Path()
-        path.move(to: CGPoint(x: center - 1.1, y: baseY))
-        path.addCurve(to: CGPoint(x: center - half, y: tipY),
-                      control1: CGPoint(x: center - 1.8, y: baseY - height * 0.40),
-                      control2: CGPoint(x: center - half, y: tipY + height * 0.25))
-        path.addQuadCurve(to: CGPoint(x: center + half, y: tipY),
-                          control: CGPoint(x: center, y: tipY - tipDepth * 2))
-        path.addCurve(to: CGPoint(x: center + 1.1, y: baseY),
-                      control1: CGPoint(x: center + half, y: tipY + height * 0.25),
-                      control2: CGPoint(x: center + 1.8, y: baseY - height * 0.40))
-        path.addQuadCurve(to: CGPoint(x: center - 1.1, y: baseY),
-                          control: CGPoint(x: center, y: baseY + 1))
-        path.closeSubpath()
-        return path
+        guard rect.height > 3, rect.width > 3 else { return Path() }
+        let centerX = rect.midX
+        let half = min(rect.width / 2 - 2, max(0.6, tipWidth / 2))
+        let topRound = min(15, max(1.3, half * 0.32))
+        let endY = rect.minY + topRound + 1
+        let startY = rect.maxY - 2
+        let available = max(1, startY - endY)
+        let steps = max(24, min(75, Int(available / 1.8)))
+        var shape = Path()
+        for i in 0...steps {
+            let fraction = CGFloat(i) / CGFloat(steps)
+            // Smooth radial expansion: zero slope at both ends, so
+            // the mark grows organically rather than forming a hard wedge.
+            let ease = fraction * fraction * (3 - 2 * fraction)
+            let radius = 0.9 + (half - 0.9) * ease
+            let verticalRadius = min(topRound, max(1.1, radius * 0.34))
+            let y = startY - available * fraction
+            shape.addEllipse(in: CGRect(
+                x: centerX - radius,
+                y: y - verticalRadius,
+                width: radius * 2,
+                height: verticalRadius * 2))
+        }
+        return shape
     }
 }
