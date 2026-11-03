@@ -257,6 +257,57 @@ jobs:
           retention-days: 7
 
 
+  native-ipad-ui-evidence:
+    needs: preflight
+    # XCUITest launches the actual app through SpringBoard/UI test services,
+    # avoiding the intermittent headless simctl bootstatus/launch deadlock.
+    # Screenshots are compositor-produced actual iPad pixels, never HTML mocks.
+    name: Native iPad visual & gesture UI tests
+    runs-on: xcode-27
+    timeout-minutes: 28
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - name: Generate native application and UI test target
+        run: |
+          set -euo pipefail
+          brew install xcodegen
+          cd IntegrationHost
+          xcodegen generate
+          xcodebuild -version
+      - name: Run real iPadOS screenshot and upward-drag tests
+        shell: bash
+        timeout-minutes: 23
+        run: |
+          set -euo pipefail
+          ID="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; a=[x for grp in d.values() for x in grp if x.get("isAvailable",True) and "iPad" in x["name"]]; p=next((x for x in a if "iPad Pro" in x["name"]),next(iter(a),None)); print(p["udid"] if p else "")')"
+          if [ -z "$ID" ]; then echo "::error::No iPad Simulator present on Xcode 27 runner"; exit 1; fi
+          set +e
+          xcodebuild -project IntegrationHost/InfiniCanvasHost.xcodeproj \
+            -scheme InfiniCanvasHost -destination "platform=iOS Simulator,id=$ID" \
+            -parallel-testing-enabled NO \
+            -derivedDataPath "$RUNNER_TEMP/InfiniNativeVisualUI" \
+            -resultBundlePath "$RUNNER_TEMP/InfiniNativeUITests.xcresult" \
+            CODE_SIGNING_ALLOWED=NO test
+          STATUS=$?
+          set -e
+          mkdir -p "$RUNNER_TEMP/InfiniNativeUIAttachments"
+          xcrun xcresulttool export attachments \
+            --path "$RUNNER_TEMP/InfiniNativeUITests.xcresult" \
+            --output-path "$RUNNER_TEMP/InfiniNativeUIAttachments" \
+            || echo "::warning::XCTest screenshots missing; visual acceptance NOT established"
+          exit "$STATUS"
+      - name: Preserve true iPadOS screenshots even when a gesture fails
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: InfiniCanvas-XCUITest-Real-iPad-${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/InfiniNativeUIAttachments/
+          if-no-files-found: warn
+          retention-days: 14
+
   modern-sdk-and-host:
     needs: preflight
     name: Xcode 27 actual Swift Playgrounds host integration
