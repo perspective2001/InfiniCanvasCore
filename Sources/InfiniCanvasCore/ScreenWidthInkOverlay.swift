@@ -50,15 +50,16 @@ final class ScreenWidthInkTouchView: UIView, UIGestureRecognizerDelegate {
     var previewOpacity: CGFloat = 1
 
     private var samples: [ScreenWidthInkSample] = []
-    private let liveLine = CAShapeLayer()
+    // Freeze completed short path chunks. Redrawing an entire long Pencil
+    // stroke from scratch on every coalesced touch is quadratic and causes
+    // lag. Only the most recent ~32 samples remain a moving CAShapeLayer.
+    private var previewChunks: [CAShapeLayer] = []
+    private var activeChunkStart = 0
+    private let previewChunkSize = 32
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         isMultipleTouchEnabled = true
-        layer.addSublayer(liveLine)
-        liveLine.fillColor = nil
-        liveLine.lineJoin = .round
-        liveLine.lineCap = .round
         let pinch = UIPinchGestureRecognizer(target: self, action: #selector(pinched(_:)))
         pinch.delegate = self
         pinch.cancelsTouchesInView = false
@@ -153,14 +154,36 @@ final class ScreenWidthInkTouchView: UIView, UIGestureRecognizerDelegate {
         return outline
     }
 
+    private func newPreviewChunk() -> CAShapeLayer {
+        let chunk = CAShapeLayer()
+        chunk.contentsScale = UIScreen.main.scale
+        chunk.fillColor = inkColor.withAlphaComponent(previewOpacity).cgColor
+        chunk.strokeColor = nil
+        layer.addSublayer(chunk)
+        previewChunks.append(chunk)
+        return chunk
+    }
+
     private func render() {
-        liveLine.path = Self.livePressurePath(samples, selectedWidth: screenWidth).cgPath
-        liveLine.fillColor = inkColor.withAlphaComponent(previewOpacity).cgColor
-        liveLine.strokeColor = nil
+        guard !samples.isEmpty else { return }
+        if previewChunks.isEmpty { _ = newPreviewChunk() }
+        while samples.count - activeChunkStart > previewChunkSize {
+            let end = activeChunkStart + previewChunkSize
+            let finished = Array(samples[activeChunkStart..<end])
+            previewChunks[previewChunks.count - 1].path =
+                Self.livePressurePath(finished, selectedWidth: screenWidth).cgPath
+            activeChunkStart = end - 1  // one shared sample prevents seams
+            _ = newPreviewChunk()
+        }
+        let current = Array(samples[activeChunkStart...])
+        previewChunks[previewChunks.count - 1].path =
+            Self.livePressurePath(current, selectedWidth: screenWidth).cgPath
     }
     private func reset() {
         samples.removeAll(keepingCapacity: true)
-        liveLine.path = nil
+        previewChunks.forEach { $0.removeFromSuperlayer() }
+        previewChunks.removeAll(keepingCapacity: true)
+        activeChunkStart = 0
     }
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let pencil = touches.first(where: { $0.type == .pencil }) else { return }
