@@ -1638,12 +1638,19 @@ struct WidthMorphPlacement {
          selectedWidth: CGFloat, travel: CGFloat) {
         let margin: CGFloat = 8
         let viewport = max(240, viewportWidth)
-        let boundedWidth = min(max(92, selectedWidth + 48), min(210, viewport - 2 * margin))
+        // Keep the Siri-like expansion beside—not ON TOP of—the RestSafe
+        // header on a 13" iPad. Previous 210pt width obscured RestSafe.
+        // 127pt requested nib still fits inside a 159pt glass surface.
+        let boundedWidth = min(max(82, selectedWidth + 32),
+                               min(160, viewport - 2 * margin))
         let center = min(viewport - boundedWidth / 2 - margin,
                          max(boundedWidth / 2 + margin, trigger.midX))
         let left = center - boundedWidth / 2
-        let anchor = min(boundedWidth - 42, max(42, trigger.midX - left))
-        let boundedHeight = max(58, min(trigger.maxY - 30, 44 + max(8, travel)))
+        let anchor = min(boundedWidth - 28, max(28, trigger.midX - left))
+        // The upper end approaches the safe header region, not the status
+        // bar; grows vertically with the swipe instead of becoming a wide box.
+        let available = max(58, trigger.maxY - 72)
+        let boundedHeight = max(58, min(available, 40 + max(8, travel)))
         width = boundedWidth
         height = boundedHeight
         centerX = center
@@ -1655,42 +1662,61 @@ struct WidthMorphPlacement {
 private struct LiquidSizeBubble: InsettableShape {
     var anchorX: CGFloat
     var insetAmount: CGFloat = 0
+    var animatableData: CGFloat {
+        get { anchorX }
+        set { anchorX = newValue }
+    }
     func inset(by amount: CGFloat) -> LiquidSizeBubble {
         var copy = self
         copy.insetAmount += amount
         return copy
     }
     func path(in rect: CGRect) -> Path {
-        let left = rect.minX + insetAmount + 2
-        let right = rect.maxX - insetAmount - 2
-        let top = rect.minY + insetAmount + 2
-        let bottom = rect.maxY - insetAmount - 1
-        let rounding = min(25, (right - left) / 4, rect.height * 0.30)
-        let bottomHalf: CGFloat = max(5, 40 - insetAmount)
-        // The contour is clipped to the VIEWPORT, but its lower end remains
-        // connected to the original size button at anchorX.
-        let pin = min(right - bottomHalf, max(left + bottomHalf, anchorX))
+        let inset = max(0, insetAmount)
+        let left = rect.minX + inset + 3
+        let right = rect.maxX - inset - 3
+        let top = rect.minY + inset + 3
+        let bottom = rect.maxY - inset - 2
+        guard right > left + 12, bottom > top + 12 else { return Path() }
+
+        let center = (left + right) / 2
+        let bodyRadius = min((right - left) / 2, 60)
+        let bodyLeft = center - bodyRadius
+        let bodyRight = center + bodyRadius
+        // A real rounded dome instead of the previous horizontal rectangular
+        // cap; rounded control flow transitions into a narrower lower neck.
+        let capBottom = top + min(bodyRadius * 0.96, (bottom - top) * 0.51)
+        let neckY = bottom - min(34, (bottom - top) * 0.29)
+        let pin = min(right - 28, max(left + 28, anchorX))
+        let neckHalf: CGFloat = min(22, bodyRadius * 0.43)
+        let lowerHalf: CGFloat = min(32, bodyRadius * 0.66)
         var path = Path()
-        path.move(to: CGPoint(x: pin - bottomHalf, y: bottom - 12))
-        path.addCurve(to: CGPoint(x: left, y: top + rounding),
-                      control1: CGPoint(x: pin - bottomHalf - 3,
-                                        y: top + rect.height * 0.56),
-                      control2: CGPoint(x: left, y: top + rounding + 16))
-        path.addQuadCurve(to: CGPoint(x: left + rounding, y: top),
-                          control: CGPoint(x: left, y: top))
-        path.addLine(to: CGPoint(x: right - rounding, y: top))
-        path.addQuadCurve(to: CGPoint(x: right, y: top + rounding),
-                          control: CGPoint(x: right, y: top))
-        path.addCurve(to: CGPoint(x: pin + bottomHalf, y: bottom - 12),
-                      control1: CGPoint(x: right, y: top + rounding + 16),
-                      control2: CGPoint(x: pin + bottomHalf + 3,
-                                        y: top + rect.height * 0.56))
-        path.addQuadCurve(to: CGPoint(x: pin - bottomHalf, y: bottom - 12),
-                          control: CGPoint(x: pin, y: bottom + 2))
+        path.move(to: CGPoint(x: pin - lowerHalf, y: bottom - 6))
+        path.addCurve(to: CGPoint(x: pin - neckHalf, y: neckY),
+                      control1: CGPoint(x: pin - lowerHalf, y: bottom - 15),
+                      control2: CGPoint(x: pin - neckHalf, y: neckY + 11))
+        path.addCurve(to: CGPoint(x: bodyLeft, y: capBottom),
+                      control1: CGPoint(x: pin - neckHalf - 2, y: neckY - 24),
+                      control2: CGPoint(x: bodyLeft, y: capBottom + 18))
+        path.addCurve(to: CGPoint(x: center, y: top),
+                      control1: CGPoint(x: bodyLeft, y: top + bodyRadius * 0.48),
+                      control2: CGPoint(x: center - bodyRadius * 0.59, y: top))
+        path.addCurve(to: CGPoint(x: bodyRight, y: capBottom),
+                      control1: CGPoint(x: center + bodyRadius * 0.59, y: top),
+                      control2: CGPoint(x: bodyRight, y: top + bodyRadius * 0.48))
+        path.addCurve(to: CGPoint(x: pin + neckHalf, y: neckY),
+                      control1: CGPoint(x: bodyRight, y: capBottom + 18),
+                      control2: CGPoint(x: pin + neckHalf + 2, y: neckY - 24))
+        path.addCurve(to: CGPoint(x: pin + lowerHalf, y: bottom - 6),
+                      control1: CGPoint(x: pin + neckHalf, y: neckY + 11),
+                      control2: CGPoint(x: pin + lowerHalf, y: bottom - 15))
+        path.addQuadCurve(to: CGPoint(x: pin - lowerHalf, y: bottom - 6),
+                          control: CGPoint(x: pin, y: bottom + 3))
         path.closeSubpath()
         return path
     }
 }
+
 
 // Smooth pressure trail with a rounded tip; no triangular edge or wedge.
 // The value comes from the measured native nib, not the requested target.
