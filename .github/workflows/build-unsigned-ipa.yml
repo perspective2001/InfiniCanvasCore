@@ -130,6 +130,11 @@ jobs:
             || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $VERSION" "$PLIST"
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$PLIST" \
             || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $BUILD_NUMBER" "$PLIST"
+          # Embed the exact tested source revision in the signed app's Info.plist.
+          # Users can later compare their installed app to its GitHub run instead
+          # of confusing package versions, PR numbers and build run numbers.
+          /usr/libexec/PlistBuddy -c "Set :InfiniCanvasSourceSHA $SOURCE_SHA" "$PLIST" \
+            || /usr/libexec/PlistBuddy -c "Add :InfiniCanvasSourceSHA string $SOURCE_SHA" "$PLIST"
           ACTUAL_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST")"
           test "$ACTUAL_ID" = "$BUNDLE_ID" || {
             echo "Bundle ID mismatch: $ACTUAL_ID != $BUNDLE_ID" >&2; exit 1;
@@ -154,6 +159,8 @@ jobs:
           fi
           cat > InfiniCanvas-BUILD-INFO.txt <<EOF
           Repository: ${GITHUB_REPOSITORY}
+          Swift package version: $(tr -d '\r\n ' < SWIFT_PACKAGE_VERSION)
+          Build number: $((10000 + GITHUB_RUN_NUMBER))
           Source commit: ${SOURCE_SHA}
           Requested ref: ${GITHUB_REF}
           Workflow event: ${GITHUB_EVENT_NAME}
