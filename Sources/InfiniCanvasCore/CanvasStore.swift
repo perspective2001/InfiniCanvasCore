@@ -547,12 +547,49 @@ final class CanvasStore: ObservableObject {
         default: return
         }
 
-        let start = samples[0].time
+        // PKStrokePath inputs are uniform cubic B-SPLINE CONTROL POINTS,
+        // not guaranteed rendered points. Two widely spaced controls produced
+        // giant overshooting strokes in the real simulator screenshots:
+        // 127pt request rendered ~48pt at 10.2% and ~334pt at 100% zoom.
+        // Resample sparse Pencil input in SCREEN space before converting to
+        // canvas coordinates, so the spline tracks the Pencil's actual path.
+        var dense: [ScreenWidthInkSample] = [samples[0]]
+        if samples.count > 1 {
+            for i in 1..<samples.count {
+                let previous = samples[i - 1]
+                let current = samples[i]
+                let deltaX = current.location.x - previous.location.x
+                let deltaY = current.location.y - previous.location.y
+                let distance = hypot(deltaX, deltaY)
+                let count = max(1, min(160, Int(ceil(distance / 5.0))))
+                for index in 1...count {
+                    let t = CGFloat(index) / CGFloat(count)
+                    dense.append(ScreenWidthInkSample(
+                        location: CGPoint(x: previous.location.x + deltaX * t,
+                                          y: previous.location.y + deltaY * t),
+                        time: previous.time + (current.time - previous.time) * Double(t),
+                        force: previous.force + (current.force - previous.force) * t,
+                        azimuth: previous.azimuth + (current.azimuth - previous.azimuth) * t,
+                        altitude: previous.altitude + (current.altitude - previous.altitude) * t))
+                }
+            }
+        }
+        // A dot or extremely short dash must still have a valid B-spline.
+        // Extra controls are subpixel and never represent extra visible ink.
+        while dense.count < 4, let last = dense.last {
+            dense.append(ScreenWidthInkSample(
+                location: CGPoint(x: last.location.x + 0.003,
+                                  y: last.location.y),
+                time: last.time + 0.001,
+                force: last.force, azimuth: last.azimuth, altitude: last.altitude))
+        }
+        let start = dense[0].time
         var points: [PKStrokePoint] = []
-        for sample in samples {
+        points.reserveCapacity(dense.count)
+        for sample in dense {
             guard let position = drawingPoint(sample.location, from: overlay, in: view) else { return }
-            // 0.5 force = exactly the selected screen nib. Force still varies
-            // the effective thickness; geometric zoom alone never changes it.
+            // 0.5 force targets the selected nib. Force still varies the
+            // effective thickness. Rendered pixels are independently tested.
             let pressure = min(1, max(0, sample.force))
             let size = max(0.4, baseline * (0.70 + 0.60 * pressure))
             points.append(PKStrokePoint(
@@ -563,13 +600,6 @@ final class CanvasStore: ObservableObject {
                 force: pressure,
                 azimuth: sample.azimuth,
                 altitude: sample.altitude))
-        }
-        if points.count == 1, let first = points.first {
-            points.append(PKStrokePoint(
-                location: CGPoint(x: first.location.x + 0.01, y: first.location.y),
-                timeOffset: 1.0 / 120.0,
-                size: first.size, opacity: first.opacity, force: first.force,
-                azimuth: first.azimuth, altitude: first.altitude))
         }
         let color = inkType == .marker
             ? inkColor.withAlphaComponent(0.52) : inkColor
