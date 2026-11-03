@@ -100,24 +100,63 @@ final class ScreenWidthInkTouchView: UIView, UIGestureRecognizerDelegate {
             altitude: touch.altitudeAngle))
     }
 
-    private func render() {
-        let path = UIBezierPath()
-        for (index, sample) in samples.enumerated() {
-            if index == 0 {
-                path.move(to: sample.location)
-                // A stationary Pencil must display a real round dot from the
-                // FIRST touch, not an invisible move-only path until lift.
-                if samples.count == 1 {
-                    path.addLine(to: CGPoint(x: sample.location.x + 0.01,
-                                             y: sample.location.y + 0.01))
-                }
-            } else {
-                path.addLine(to: sample.location)
-            }
+    // The live display and committed PKStroke use the SAME force-to-width
+    // calculation. A constant-width CAShapeLayer line used to lie about the
+    // thickness of a pressure-varying stroke while the Pencil was down.
+    static func forceAdjustedScreenWidth(_ width: CGFloat, force: CGFloat) -> CGFloat {
+        max(0.4, width * (0.70 + 0.60 * min(1, max(0, force))))
+    }
+
+    // Construct a variable-width swept stroke using a round dab at every
+    // sample and a trapezoid joining adjacent samples. This renders the
+    // actual pressure envelope while moving, including a one-point dot.
+    // Control point placement remains in screen space, independent of zoom.
+    static func livePressurePath(_ points: [ScreenWidthInkSample],
+                                 selectedWidth: CGFloat) -> UIBezierPath {
+        let outline = UIBezierPath()
+        guard let first = points.first else { return outline }
+        func radius(_ point: ScreenWidthInkSample) -> CGFloat {
+            forceAdjustedScreenWidth(selectedWidth, force: point.force) / 2
         }
-        liveLine.path = path.cgPath
-        liveLine.lineWidth = max(0.4, screenWidth)
-        liveLine.strokeColor = inkColor.withAlphaComponent(previewOpacity).cgColor
+        func disk(_ center: CGPoint, _ r: CGFloat) {
+            outline.append(UIBezierPath(ovalIn: CGRect(
+                x: center.x - r, y: center.y - r,
+                width: r * 2, height: r * 2)))
+        }
+        disk(first.location, radius(first))
+        if points.count < 2 { return outline }
+        for index in 1..<points.count {
+            let old = points[index - 1]
+            let next = points[index]
+            let dx = next.location.x - old.location.x
+            let dy = next.location.y - old.location.y
+            let distance = hypot(dx, dy)
+            let r1 = radius(old)
+            let r2 = radius(next)
+            guard distance >= 0.001 else {
+                disk(next.location, r2)
+                continue
+            }
+            let nx = -dy / distance
+            let ny = dx / distance
+            outline.move(to: CGPoint(x: old.location.x + nx * r1,
+                                     y: old.location.y + ny * r1))
+            outline.addLine(to: CGPoint(x: next.location.x + nx * r2,
+                                        y: next.location.y + ny * r2))
+            outline.addLine(to: CGPoint(x: next.location.x - nx * r2,
+                                        y: next.location.y - ny * r2))
+            outline.addLine(to: CGPoint(x: old.location.x - nx * r1,
+                                        y: old.location.y - ny * r1))
+            outline.close()
+            disk(next.location, r2)
+        }
+        return outline
+    }
+
+    private func render() {
+        liveLine.path = Self.livePressurePath(samples, selectedWidth: screenWidth).cgPath
+        liveLine.fillColor = inkColor.withAlphaComponent(previewOpacity).cgColor
+        liveLine.strokeColor = nil
     }
     private func reset() {
         samples.removeAll(keepingCapacity: true)
