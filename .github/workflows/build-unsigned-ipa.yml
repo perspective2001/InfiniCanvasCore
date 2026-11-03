@@ -19,30 +19,34 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/build-unsigned-ipa.yml'
-  # A new preview is made automatically from the exact main-branch commit
-  # that passed the full Xcode 27 + PencilKit simulator gates.
+  # Build a PREVIEW only from a completed, successful Apple validation.
+  # Includes same-repository draft candidate branches for physical Pencil
+  # testing. No candidate can publish a primary-ID release or modify main.
   workflow_run:
     workflows: ["Validate Infini Canvas on Apple SDK"]
     types: [completed]
-    branches: [main]
 
 permissions:
   contents: read
   actions: read
 
 concurrency:
-  group: infini-unsigned-ipa-${{ github.workflow }}-${{ github.ref }}
+  group: infini-unsigned-ipa-${{ github.workflow }}-${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.ref }}
   cancel-in-progress: true
 
 jobs:
   unsigned-ipad:
-    # Ignore PR validation runs and failed quality checks. Only a successful
-    # PUSH to main can trigger an automatic ready-to-download preview.
+    # Never auto-build from unvalidated source. For physical testing, an
+    # Apple-validated candidate branch in THIS repository may produce only
+    # the separate PREVIEW identity; no data or primary app is replaced.
     if: >-
       ${{ github.event_name != 'workflow_run' ||
           (github.event.workflow_run.conclusion == 'success' &&
-           github.event.workflow_run.event == 'push' &&
-           github.event.workflow_run.head_branch == 'main') }}
+           github.event.workflow_run.head_repository.full_name == github.repository &&
+           ((github.event.workflow_run.event == 'push' &&
+             github.event.workflow_run.head_branch == 'main') ||
+            (github.event.workflow_run.event == 'pull_request' &&
+             startsWith(github.event.workflow_run.head_branch, 'candidate-infini-')))) }}
     name: Compile device IPA without signing or Mac rental
     runs-on: xcode-27
     timeout-minutes: 25
