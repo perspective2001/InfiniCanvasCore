@@ -181,6 +181,21 @@ final class CanvasCoreTests: XCTestCase {
         window.isHidden = true
     }
 
+    func testLiquidPressureStrokeHasRoundFullWidthTipInsideGlass() {
+        for nib: CGFloat in [2.5, 15, 60, 127] {
+            // Geometry of the *actual production SwiftUI Shape*, not an HTML mock.
+            let bounds = CGRect(x: 0, y: 0, width: max(92, nib + 48), height: 140)
+            let shape = LiquidPressureStroke(tipWidth: nib).path(in: bounds).boundingRect
+            XCTAssertFalse(shape.isEmpty)
+            XCTAssertGreaterThanOrEqual(shape.minX, -0.01)
+            XCTAssertLessThanOrEqual(shape.maxX, bounds.maxX + 0.01)
+            XCTAssertGreaterThanOrEqual(shape.minY, -0.01)
+            XCTAssertLessThanOrEqual(shape.maxY, bounds.maxY + 0.01)
+            XCTAssertEqual(shape.width, nib, accuracy: 2,
+                           "Uppermost rounded mark should show selected on-screen width")
+        }
+    }
+
     func testNativeMorphPlacementPreservesScreenBoundsAndOriginalPillAnchor() {
         for viewportWidth: CGFloat in [768, 834, 1024, 1366] {
             for selectedWidth: CGFloat in [2.5, 15, 60, 127, 160] {
