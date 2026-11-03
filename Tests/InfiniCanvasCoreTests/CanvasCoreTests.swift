@@ -629,8 +629,26 @@ final class CanvasCoreTests: XCTestCase {
         XCTAssertFalse(canvas.panGestureRecognizer.isEnabled, "Lasso overlay owns finger navigation")
         XCTAssertFalse(canvas.pinchGestureRecognizer?.isEnabled ?? true, "Lasso overlay owns pinch zoom")
         store.tool = .pen
-        XCTAssertTrue(canvas.panGestureRecognizer.isEnabled)
-        XCTAssertTrue(canvas.pinchGestureRecognizer?.isEnabled ?? false)
+        if store.needsScreenWidthInkOverlay {
+            // At 1000% even a modest 2.5 screen-pt pen may be below the
+            // native PKInkingTool minimum. The full-screen custom Pencil
+            // view intentionally owns navigation; expecting the *covered*
+            // native recognizers to be enabled is incorrect.
+            XCTAssertFalse(canvas.panGestureRecognizer.isEnabled)
+            XCTAssertFalse(canvas.pinchGestureRecognizer?.isEnabled ?? true)
+            let overlay = ScreenWidthInkTouchView(frame: window.bounds)
+            let pan = overlay.gestureRecognizers?
+                .compactMap { $0 as? UIPanGestureRecognizer }.first
+            let pinch = overlay.gestureRecognizers?
+                .compactMap { $0 as? UIPinchGestureRecognizer }.first
+            XCTAssertNotNil(pan, "Custom nib path must also provide finger navigation")
+            XCTAssertNotNil(pinch, "Custom nib path must also provide pinch zoom")
+            XCTAssertEqual(pan?.minimumNumberOfTouches, 1)
+            XCTAssertEqual(pan?.maximumNumberOfTouches, 2)
+        } else {
+            XCTAssertTrue(canvas.panGestureRecognizer.isEnabled)
+            XCTAssertTrue(canvas.pinchGestureRecognizer?.isEnabled ?? false)
+        }
     }
 
     func testActualRootViewLaunchesWithVisibleControlsAndCanvas() async throws {
