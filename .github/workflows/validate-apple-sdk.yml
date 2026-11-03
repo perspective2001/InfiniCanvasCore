@@ -234,7 +234,27 @@ jobs:
           set -euo pipefail
           SIMULATOR_ID="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; all=[x for a in d.values() for x in a if x.get("isAvailable",True)]; pick=next((x for x in all if "iPad" in x["name"]), next((x for x in all if "iPhone" in x["name"]), None)); print(pick["udid"] if pick else "")')"
           if [ -z "$SIMULATOR_ID" ]; then echo "No iOS Simulator" >&2; exit 1; fi
-          xcodebuild -scheme InfiniCanvasCore -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath /tmp/InfiniCoreTests26 CODE_SIGNING_ALLOWED=NO test
+          RESULT_BUNDLE="$RUNNER_TEMP/InfiniCoreTests26.xcresult"
+          set +e
+          xcodebuild -scheme InfiniCanvasCore -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath /tmp/InfiniCoreTests26 -resultBundlePath "$RESULT_BUNDLE" CODE_SIGNING_ALLOWED=NO test
+          TEST_EXIT=$?
+          set -e
+          # XCTest saves full-size images from the REAL PencilKit rasterizer
+          # even if simctl SpringBoard installation/launch is unstable.
+          if [ -d "$RESULT_BUNDLE" ]; then
+            mkdir -p "$RUNNER_TEMP/InfiniRealPencilKitRaster"
+            xcrun xcresulttool export attachments --path "$RESULT_BUNDLE" --output-path "$RUNNER_TEMP/InfiniRealPencilKitRaster" || echo "::warning::No exported XCTest images; visual raster check remains unverified"
+          fi
+          exit "$TEST_EXIT"
+
+      - name: Upload actual PencilKit raster images from XCTest
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: InfiniCanvas-Real-PencilKit-Raster-${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/InfiniRealPencilKitRaster/
+          if-no-files-found: warn
+          retention-days: 7
 
 
   modern-sdk-and-host:
