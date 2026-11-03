@@ -181,6 +181,44 @@ final class CanvasCoreTests: XCTestCase {
         window.isHidden = true
     }
 
+    func testActualGlassMorphContainsRisingInkWithoutLargeBlackOverhang() {
+        // Prior simulator screenshot exposed a wide black oval OUTSIDE the
+        // Liquid Glass surface at 127pt. Test the actual two production Shapes
+        // together, in the same coordinate system, including right-edge
+        // displacement of the lower control. ClipShape is still required as a
+        // final guard, but large accidental cropping is itself a design bug.
+        for nib: CGFloat in [15, 60, 127] {
+            let trigger = CGRect(x: 908, y: 170, width: 84, height: 44)
+            let place = WidthMorphPlacement(
+                viewportWidth: 1024, trigger: trigger,
+                selectedWidth: nib, travel: 270)
+            let panel = CGRect(x: 0, y: 0, width: place.width, height: place.height)
+            let outer = LiquidSizeBubble(anchorX: place.anchorX).path(in: panel)
+            let topInset = min(31, max(12, 12 + nib * 0.14))
+            // Text header is about 13pt + 2pt spacing at this font size.
+            let innerRect = CGRect(x: 11, y: topInset + 15,
+                                   width: place.width - 22,
+                                   height: max(14, place.height - topInset - 26))
+            let line = LiquidPressureStroke(
+                tipWidth: nib,
+                baseOffset: place.anchorX - place.width / 2).path(in: innerRect)
+            var inkPixels = 0
+            var outsidePixels = 0
+            for xi in 0..<Int(place.width) {
+                for yi in 0..<Int(place.height) {
+                    let p = CGPoint(x: CGFloat(xi) + 0.5, y: CGFloat(yi) + 0.5)
+                    if line.contains(p) {
+                        inkPixels += 1
+                        if !outer.contains(p) { outsidePixels += 1 }
+                    }
+                }
+            }
+            XCTAssertGreaterThan(inkPixels, 0)
+            XCTAssertLessThan(CGFloat(outsidePixels) / CGFloat(max(inkPixels, 1)),
+                              0.10, "More than 10% of brush preview would be cut by glass")
+        }
+    }
+
     func testLiquidPressureStrokeHasRoundFullWidthTipInsideGlass() {
         for nib: CGFloat in [2.5, 15, 60, 127] {
             // Geometry of the *actual production SwiftUI Shape*, not an HTML mock.
