@@ -1505,7 +1505,7 @@ struct ChatDestinationView: View {
                         let source = info["InfiniCanvasSourceSHA"] as? String ?? "Not recorded"
                         let identity = info["CFBundleIdentifier"] as? String ?? "Unknown"
                         UIPasteboard.general.string =
-                            "InfiniCanvas version \\(version), build \\(build), source \\(source), app ID \\(identity)"
+                            "InfiniCanvas version \(version), build \(build), source \(source), app ID \(identity)"
                     }
                     Text("GitHub Action run numbers and pull request numbers are not app versions. These details identify the build actually installed on this iPad.")
                         .font(.footnote).foregroundStyle(.secondary)
