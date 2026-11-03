@@ -1490,6 +1490,26 @@ struct ChatDestinationView: View {
                     Text("This prototype does not synchronize automatically across devices. Store important backups in Files or iCloud Drive. Local Vision handwriting search is best effort.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
+                Section("Installed app version") {
+                    LabeledContent("App version",
+                        value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown")
+                    LabeledContent("Installed build",
+                        value: Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "Unknown")
+                    LabeledContent("Source commit",
+                        value: (Bundle.main.infoDictionary?["InfiniCanvasSourceSHA"] as? String)
+                            .map { String($0.prefix(12)) } ?? "Older build (not recorded)")
+                    Button("Copy installed build details", systemImage: "doc.on.doc") {
+                        let info = Bundle.main.infoDictionary ?? [:]
+                        let version = info["CFBundleShortVersionString"] as? String ?? "Unknown"
+                        let build = info["CFBundleVersion"] as? String ?? "Unknown"
+                        let source = info["InfiniCanvasSourceSHA"] as? String ?? "Not recorded"
+                        let identity = info["CFBundleIdentifier"] as? String ?? "Unknown"
+                        UIPasteboard.general.string =
+                            "InfiniCanvas version \\(version), build \\(build), source \\(source), app ID \\(identity)"
+                    }
+                    Text("GitHub Action run numbers and pull request numbers are not app versions. These details identify the build actually installed on this iPad.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
             }
             .navigationTitle("Preferences")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
