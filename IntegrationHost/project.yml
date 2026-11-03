@@ -36,3 +36,25 @@ targets:
         TARGETED_DEVICE_FAMILY: '2'
         GENERATE_INFOPLIST_FILE: 'NO'
         CODE_SIGNING_ALLOWED: 'NO'
+
+  InfiniCanvasHostUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - UITests
+    dependencies:
+      - target: InfiniCanvasHost
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.perspective2001.infini-canvas.visualtests
+        TEST_TARGET_NAME: InfiniCanvasHost
+        CODE_SIGNING_ALLOWED: 'NO'
+
+schemes:
+  InfiniCanvasHost:
+    build:
+      targets:
+        InfiniCanvasHost: all
+    test:
+      targets:
+        - name: InfiniCanvasHostUITests

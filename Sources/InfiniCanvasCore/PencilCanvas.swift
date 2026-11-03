@@ -134,7 +134,7 @@ final class LassoTouchView: UIView, UIGestureRecognizerDelegate {
         addGestureRecognizer(pinch)
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handleFingerPan(_:)))
         pan.minimumNumberOfTouches = 1
-        pan.maximumNumberOfTouches = 1
+        pan.maximumNumberOfTouches = 2
         pan.delegate = self
         pan.cancelsTouchesInView = false
         addGestureRecognizer(pan)
@@ -143,7 +143,9 @@ final class LassoTouchView: UIView, UIGestureRecognizerDelegate {
     required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         // Filter broad stationary palm contacts from custom overlay navigation.
-        touch.type == .direct && touch.majorRadius < 27
+        // Keep pencil-only drawing while avoiding arbitrary rejection of
+        // broad but intentional fingertip contacts on gesture overlays.
+        touch.type == .direct && touch.majorRadius < 38
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
@@ -222,9 +224,16 @@ final class LassoTouchView: UIView, UIGestureRecognizerDelegate {
                 let originalCenter = CGPoint(x: dragPreviewInitialFrame.midX + dx,
                                              y: dragPreviewInitialFrame.midY + dy)
                 let pull = proximity * 0.28
+                // The entire bar is droppable. A preview approaches the
+                // nearest point of the bar rather than snapping sideways to
+                // its global centre (which was a major source of odd motion).
+                let anchor = CGPoint(
+                    x: min(max(originalCenter.x, stashDropFrame.minX + 20),
+                           stashDropFrame.maxX - 20),
+                    y: stashDropFrame.midY)
                 preview.center = CGPoint(
-                    x: originalCenter.x + (stashDropFrame.midX - originalCenter.x) * pull,
-                    y: originalCenter.y + (stashDropFrame.midY - originalCenter.y) * pull)
+                    x: originalCenter.x + (anchor.x - originalCenter.x) * pull,
+                    y: originalCenter.y + (anchor.y - originalCenter.y) * pull)
                 preview.alpha = 1 - proximity * 0.08
             }
             let stepX = location.x - lastPoint.x
@@ -267,7 +276,11 @@ final class LassoTouchView: UIView, UIGestureRecognizerDelegate {
                 onStashProximity?(0)
                 let thumbnail = selectedPreview
                 selectedPreview = nil
-                let target = CGPoint(x: stashDropFrame.midX, y: stashDropFrame.midY)
+                let origin = thumbnail?.center ?? ending
+                let target = CGPoint(
+                    x: min(max(origin.x, stashDropFrame.minX + 20),
+                           stashDropFrame.maxX - 20),
+                    y: stashDropFrame.midY)
                 if let thumbnail {
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     UIView.animate(withDuration: 0.38, delay: 0,

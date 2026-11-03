@@ -1,5 +1,7 @@
 # CURRENT WORKING STATE — InfiniCanvas
 
+**Nov 3 experimental branch status:** [PR #29](https://github.com/perspective2001/InfiniCanvasCore/pull/29), **NOT merged or released**. Its source now includes RestSafe pan and inserted text/link trash, an experimental large-width editable Pencil stroke with pressure-responsive live display and chunked rendering, smoother rounded morph stroke shape, and a DEBUG-only real ink capture at 10.2%/100% zoom. The latest code has **no completed exact-SHA Xcode simulator validation** and no physical Pencil approval. Original Windows AppRelay is local and not replaced. All blockers stay in [ACCEPTANCE_LEDGER.md](ACCEPTANCE_LEDGER.md).
+
 **Nov 3 quick resume:** Start with [the permanent acceptance ledger](ACCEPTANCE_LEDGER.md). It records **all unfinished user requests** and evidence checks. Current unreleased experiment is draft [PR #29](https://github.com/perspective2001/InfiniCanvasCore/pull/29); `main` contains only the previously existing application source and documentation, not an approved release. Last reported installed preview source version: `1.0.5`, exact installed build/SHA unknown. The user's local **AppRelay v3** already exists; new duplicate scripts were removed from the experiment. No new build may be called done without latest-SHA CI and genuine iPad Pencil Pro acceptance.
 *Always read this one page before an InfiniCanvas edit; update only when a decision or verified state changes. Last updated 2026-11-01.*
 

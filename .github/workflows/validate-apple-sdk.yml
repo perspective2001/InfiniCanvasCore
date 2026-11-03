@@ -37,6 +37,8 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
+          # Use EXACT candidate SHA, not GitHub's temporary PR merge commit.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
       - name: Verify host identity and local-package wiring before Mac builds
         run: python3 Scripts/preflight_contract.py
 
@@ -51,6 +53,8 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
+          # Use EXACT candidate SHA, not GitHub's temporary PR merge commit.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
       - name: SDK versions
         run: xcodebuild -version
       - name: Geometric zoom/lasso invariants
@@ -62,19 +66,18 @@ jobs:
         run: |
           set -euo pipefail
           xcodebuild -scheme InfiniCanvasCore -destination 'generic/platform=iOS Simulator' -derivedDataPath /tmp/InfiniCore26 CODE_SIGNING_ALLOWED=NO build
-      - name: Test actual SwiftUI root, PencilKit and persistence
-        timeout-minutes: 9
-        run: |
-          set -euo pipefail
-          SIMULATOR_ID="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; all=[x for a in d.values() for x in a if x.get("isAvailable",True)]; pick=next((x for x in all if "iPad" in x["name"]), next((x for x in all if "iPhone" in x["name"]), None)); print(pick["udid"] if pick else "")')"
-          if [ -z "$SIMULATOR_ID" ]; then echo "No iOS Simulator" >&2; exit 1; fi
-          xcodebuild -scheme InfiniCanvasCore -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath /tmp/InfiniCoreTests26 CODE_SIGNING_ALLOWED=NO test
-      # The iOS 26 runner above already demonstrated a functioning iPad
-      # simulator by running actual PencilKit tests. Use THAT simulator for
-      # compositor screenshots; the custom Xcode27 host runner stalled on boot.
+      # Capture on a fresh simulator FIRST. Testing PencilKit before capture
+      # sometimes leaves CoreSimulator unresponsive during simctl bootstatus;
+      # previous runs timed out at both 55s and 150s. Never accept an absent
+      # PNG as visual evidence.
       - name: Build actual native host and capture real iPad screen (same tested SDK)
-        timeout-minutes: 7
+        # Capture candidate visuals even when a separate width assertion fails.
+        # CI remains RED; screenshots diagnose failures, never bypass them.
+        if: always()
+        timeout-minutes: 14
         shell: bash
+        env:
+          INFINI_SOURCE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/InfiniVisualEvidence"
@@ -96,36 +99,214 @@ jobs:
                    if 'iPad' in d['name'] and d.get('isAvailable',True)]
           if not options: raise RuntimeError('No iPad Simulator on tested iOS26 runner')
           sim=next((d for d in options if d['state']=='Booted'),options[0])
+          (dest/'visual-review-info.txt').write_text(
+              'Source SHA: '+os.environ['INFINI_SOURCE_SHA']+'\\n'
+              'Capture: PENDING; native app must launch before review\\n'
+              'Motion: NOT CAPTURED\\n')
           sid=sim['udid']
           def cmd(*args,seconds=55):
               print('VISUAL-CAPTURE:',*args,flush=True)
               return subprocess.run(args,timeout=seconds,check=True)
           if sim['state']!='Booted': cmd('xcrun','simctl','boot',sid,seconds=50)
-          cmd('xcrun','simctl','bootstatus',sid,'-b',seconds=55)
-          cmd('xcrun','simctl','install',sid,os.environ['APP'],seconds=45)
-          cmd('xcrun','simctl','launch',sid,'com.perspective2001.infini-canvas.native',seconds=35)
+          # The hosted macOS26 simulator sometimes reports Booted while
+          # 'simctl bootstatus -b' hangs indefinitely (seen Nov 3, 2026).
+          # Bootstatus is NOT the success gate: installation, native app
+          # launch AND actual screenshot bytes are. Allow one bounded fallback
+          # to the *confirmed Booted* simulator, never to an absent image.
+          try:
+              cmd('xcrun','simctl','bootstatus',sid,'-b',seconds=95)
+          except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as err:
+              diagnostic = subprocess.run(
+                  ['xcrun','simctl','list','devices','available','-j'],
+                  capture_output=True,text=True,timeout=25,check=True)
+              live=json.loads(diagnostic.stdout)
+              same_device=next((d for group in live['devices'].values()
+                                for d in group if d.get('udid')==sid),None)
+              (dest/'simulator-bootstatus-warning.txt').write_text(
+                  'Simulator: '+sim['name']+' ['+sid+']\\n'
+                  'State after bootstatus failure: '+str(same_device and same_device.get('state'))+'\\n'
+                  'Reason: '+str(err)+'\\n'
+                  'No visual validation can pass without app launch and actual PNG.\\n')
+              if not same_device or same_device.get('state')!='Booted':
+                  raise RuntimeError('iPad simulator was not booted: visual capture impossible') from err
+              print('::warning::simctl bootstatus timed out but simulator is Booted; '
+                    'checking actual install, launch and screenshot next',flush=True)
+          # A Booted status or successful build alone is NEVER visual acceptance.
+          cmd('xcrun','simctl','install',sid,os.environ['APP'],seconds=115)
+          cmd('xcrun','simctl','launch',sid,'com.perspective2001.infini-canvas.native',seconds=80)
           time.sleep(5)
           shot=dest/'native-ipad-root.png'
           cmd('xcrun','simctl','io',sid,'screenshot','--type=png',str(shot),seconds=30)
           if shot.stat().st_size<20000: raise RuntimeError('Native screenshot blank or missing')
           (dest/'visual-review-info.txt').write_text(
-              'Source SHA: '+os.environ['GITHUB_SHA']+'\\n'
+              'Source SHA: '+os.environ['INFINI_SOURCE_SHA']+'\\n'
               'Actual host: '+os.environ['APP']+'\\n'
               'Simulator: '+sim['name']+' ['+sid+']\\n'
               'Capture: native iOS26 iPad Simulator rendered pixels\\n'
               'Visual acceptance: UNREVIEWED - requires human/model opening this image\\n'
               'Motion: NOT CAPTURED; this screenshot proves only resting UI\\n')
           print('REAL NATIVE IPAD SCREENSHOT:',shot,'bytes:',shot.stat().st_size,flush=True)
+          # Native candidate-state capture. These arguments are recognized only
+          # by the DEBUG application view, not by release installations.
+          # Static frames test shape and positioning; video shows the app's
+          # actual SwiftUI animation state path, NOT a physical Pencil gesture.
+          for percentage in (25, 60, 100):
+              subprocess.run(['xcrun','simctl','terminate',sid,
+                              'com.perspective2001.infini-canvas.native'],
+                             timeout=25,check=False)
+              cmd('xcrun','simctl','launch',sid,
+                  'com.perspective2001.infini-canvas.native',
+                  '--infini-visual-morph='+str(percentage), seconds=85)
+              time.sleep(3)
+              state_shot=dest/('native-width-morph-'+str(percentage)+'.png')
+              cmd('xcrun','simctl','io',sid,'screenshot','--type=png',
+                  str(state_shot),seconds=30)
+              if state_shot.stat().st_size<20000:
+                  raise RuntimeError('Missing real native morph frame '+str(percentage))
+              print('REAL MORPH FRAME',percentage,state_shot.stat().st_size,flush=True)
+          import signal
+          subprocess.run(['xcrun','simctl','terminate',sid,
+                          'com.perspective2001.infini-canvas.native'],
+                         timeout=25,check=False)
+          movie=dest/'native-width-morph-state-animation.mp4'
+          recorder=subprocess.Popen(['xcrun','simctl','io',sid,'recordVideo',
+                                     '--force',str(movie)],
+                                    stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.PIPE, start_new_session=True)
+          try:
+              time.sleep(1)
+              cmd('xcrun','simctl','launch',sid,
+                  'com.perspective2001.infini-canvas.native',
+                  '--infini-visual-morph-animation', seconds=85)
+              time.sleep(4)
+          finally:
+              if recorder.poll() is None:
+                  os.killpg(recorder.pid,signal.SIGINT)
+              try: recorder.communicate(timeout=25)
+              except subprocess.TimeoutExpired:
+                  recorder.kill(); recorder.communicate()
+          if not movie.exists() or movie.stat().st_size<30000:
+              raise RuntimeError('Missing native morph state-animation recording')
+          (dest/'morph-capture-scope.txt').write_text(
+              'Native production SwiftUI ContentView + PencilKit host, debug-state driven.\\n'
+              'Frames: morph 25, 60, 100 percent; recording: expansion/collapse.\\n'
+              'Not a Siri-match claim. Not physical Apple Pencil input verification.\\n'
+              'Do not approve until actual frames and movie are opened and assessed.\\n')
+          print('REAL NATIVE MORPH VIDEO:',movie,movie.stat().st_size,flush=True)
+          # This captures the ACTUAL PencilKit rasterized editable stroke,
+          # not just the requested in-memory PKStrokePoint sizes. Compare the
+          # visible ~127pt mark at 10.2% and 100% canvas zoom for size drift.
+          for zoom_label, zoom in [('0102','0.102'), ('100','1.0')]:
+              subprocess.run(['xcrun','simctl','terminate',sid,
+                              'com.perspective2001.infini-canvas.native'],
+                             timeout=25,check=False)
+              cmd('xcrun','simctl','launch',sid,
+                  'com.perspective2001.infini-canvas.native',
+                  '--infini-visual-ink=127:'+zoom,seconds=85)
+              time.sleep(3)
+              ink_shot=dest/('native-editable-ink-127-zoom-'+zoom_label+'.png')
+              cmd('xcrun','simctl','io',sid,'screenshot','--type=png',
+                  str(ink_shot),seconds=35)
+              if ink_shot.stat().st_size<20000:
+                  raise RuntimeError('Missing real PencilKit ink screenshot at '+zoom)
+              print('REAL EDITABLE INK AT ZOOM',zoom,'bytes',ink_shot.stat().st_size,flush=True)
+          (dest/'ink-capture-scope.txt').write_text(
+              'Source SHA: '+os.environ['INFINI_SOURCE_SHA']+'\\n'
+              'Actual native PKStrokePoint ink at 127 nominal screen points.\\n'
+              'PNG captured at 10.2 percent and 100 percent zoom.\\n'
+              'Rendered pixels must be inspected and compared; drawing size is NOT accepted by assertion alone.\\n'
+              'Physical Pencil force/tilt latency still requires device verification.\\n')
           PY
       - name: Upload native iPad screenshot for visual inspection
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: InfiniCanvas-Native-Visual-${{ github.sha }}
+          name: InfiniCanvas-Native-Visual-${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/InfiniVisualEvidence/
           retention-days: 14
           if-no-files-found: warn
 
+      - name: Test actual SwiftUI root, PencilKit and persistence
+        # Still test native PencilKit even if visual capture fails.
+        if: always()
+        timeout-minutes: 9
+        run: |
+          set -euo pipefail
+          SIMULATOR_ID="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; all=[x for a in d.values() for x in a if x.get("isAvailable",True)]; pick=next((x for x in all if "iPad" in x["name"]), next((x for x in all if "iPhone" in x["name"]), None)); print(pick["udid"] if pick else "")')"
+          if [ -z "$SIMULATOR_ID" ]; then echo "No iOS Simulator" >&2; exit 1; fi
+          RESULT_BUNDLE="$RUNNER_TEMP/InfiniCoreTests26.xcresult"
+          set +e
+          xcodebuild -scheme InfiniCanvasCore -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath /tmp/InfiniCoreTests26 -resultBundlePath "$RESULT_BUNDLE" CODE_SIGNING_ALLOWED=NO test
+          TEST_EXIT=$?
+          set -e
+          # XCTest saves full-size images from the REAL PencilKit rasterizer
+          # even if simctl SpringBoard installation/launch is unstable.
+          if [ -d "$RESULT_BUNDLE" ]; then
+            mkdir -p "$RUNNER_TEMP/InfiniRealPencilKitRaster"
+            xcrun xcresulttool export attachments --path "$RESULT_BUNDLE" --output-path "$RUNNER_TEMP/InfiniRealPencilKitRaster" || echo "::warning::No exported XCTest images; visual raster check remains unverified"
+          fi
+          exit "$TEST_EXIT"
+
+      - name: Upload actual PencilKit raster images from XCTest
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: InfiniCanvas-Real-PencilKit-Raster-${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/InfiniRealPencilKitRaster/
+          if-no-files-found: warn
+          retention-days: 7
+
+
+  native-ipad-ui-evidence:
+    needs: preflight
+    # XCUITest launches the actual app through SpringBoard/UI test services,
+    # avoiding the intermittent headless simctl bootstatus/launch deadlock.
+    # Screenshots are compositor-produced actual iPad pixels, never HTML mocks.
+    name: Native iPad visual & gesture UI tests
+    runs-on: xcode-27
+    timeout-minutes: 28
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - name: Generate native application and UI test target
+        run: |
+          set -euo pipefail
+          brew install xcodegen
+          cd IntegrationHost
+          xcodegen generate
+          xcodebuild -version
+      - name: Run real iPadOS screenshot and upward-drag tests
+        shell: bash
+        timeout-minutes: 23
+        run: |
+          set -euo pipefail
+          ID="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; a=[x for grp in d.values() for x in grp if x.get("isAvailable",True) and "iPad" in x["name"]]; p=next((x for x in a if "iPad Pro" in x["name"]),next(iter(a),None)); print(p["udid"] if p else "")')"
+          if [ -z "$ID" ]; then echo "::error::No iPad Simulator present on Xcode 27 runner"; exit 1; fi
+          set +e
+          xcodebuild -project IntegrationHost/InfiniCanvasHost.xcodeproj \
+            -scheme InfiniCanvasHost -destination "platform=iOS Simulator,id=$ID" \
+            -parallel-testing-enabled NO \
+            -derivedDataPath "$RUNNER_TEMP/InfiniNativeVisualUI" \
+            -resultBundlePath "$RUNNER_TEMP/InfiniNativeUITests.xcresult" \
+            CODE_SIGNING_ALLOWED=NO test
+          STATUS=$?
+          set -e
+          mkdir -p "$RUNNER_TEMP/InfiniNativeUIAttachments"
+          xcrun xcresulttool export attachments \
+            --path "$RUNNER_TEMP/InfiniNativeUITests.xcresult" \
+            --output-path "$RUNNER_TEMP/InfiniNativeUIAttachments" \
+            || echo "::warning::XCTest screenshots missing; visual acceptance NOT established"
+          exit "$STATUS"
+      - name: Preserve true iPadOS screenshots even when a gesture fails
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: InfiniCanvas-XCUITest-Real-iPad-${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/InfiniNativeUIAttachments/
+          if-no-files-found: warn
+          retention-days: 14
 
   modern-sdk-and-host:
     needs: preflight
@@ -136,6 +317,8 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
+          # Use EXACT candidate SHA, not GitHub's temporary PR merge commit.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
       - name: Confirm modern SDK
         run: |
           xcodebuild -version

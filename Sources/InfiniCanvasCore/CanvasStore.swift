@@ -139,23 +139,41 @@ final class CanvasStore: ObservableObject {
         didSet {
             // Lasso selection belongs to the lasso overlay, not the next pen/eraser.
             if oldValue == .capture && tool != .capture { clearSelection() }
+            applyZoomCompensatedNib()
             updateTool()
         }
     }
     @Published var inkColor = UIColor(red: 0.10, green: 0.16, blue: 0.20, alpha: 1) { didSet { updateTool() } }
-    @Published var strokeWidth: CGFloat = 2.5 { didSet { updateTool() } }
+    @Published var strokeWidth: CGFloat = 2.5 {
+        didSet {
+            if !adjustingZoomNib && tool != .capture && tool != .eraser &&
+                !(tool == .marker && fixedHighlighter) {
+                selectedScreenWidths[tool] = nominalToolWidth * max(zoom, 0.045)
+            }
+            updateTool()
+        }
+    }
     @Published var penProfile: PenProfile = .fluid {
         didSet { UserDefaults.standard.set(penProfile.rawValue, forKey: "InfiniCanvas.penProfile"); updateTool() }
     }
     // Fixed nib is a dedicated Pencil-only renderer, not a claim that native PencilKit locks tilt.
     @Published var fixedHighlighter = true {
-        didSet { UserDefaults.standard.set(fixedHighlighter, forKey: "InfiniCanvas.fixedHighlighter"); updateTool() }
+        didSet {
+            UserDefaults.standard.set(fixedHighlighter, forKey: "InfiniCanvas.fixedHighlighter")
+            if tool == .marker { applyZoomCompensatedNib() }
+            updateTool()
+        }
     }
     @Published var markerHeight: CGFloat = 22 {
         didSet { UserDefaults.standard.set(Double(markerHeight), forKey: "InfiniCanvas.markerHeight") }
     }
     @Published var markerWidth: CGFloat = 5 {
-        didSet { UserDefaults.standard.set(Double(markerWidth), forKey: "InfiniCanvas.markerWidth") }
+        didSet {
+            UserDefaults.standard.set(Double(markerWidth), forKey: "InfiniCanvas.markerWidth")
+            if !adjustingZoomNib && tool == .marker && fixedHighlighter {
+                selectedScreenWidths[.marker] = markerWidth * max(zoom, 0.045)
+            }
+        }
     }
     @Published var paper: PaperStyle = .blank { didSet { canvas?.backgroundColor = Self.paperBackground(paper); saveIndex() } }
     @Published var clips: [SavedClip] = []
@@ -181,11 +199,81 @@ final class CanvasStore: ObservableObject {
     @Published var selectionActive = false
     @Published var isSaved = true
     @Published var eraserPrecision: EraserPrecision = .detail { didSet { updateTool() } }
-    @Published var eraserWidth: CGFloat = 12 { didSet { updateTool() } }
+    @Published var eraserWidth: CGFloat = 12 {
+        didSet {
+            if !adjustingZoomNib && tool == .eraser {
+                selectedScreenWidths[.eraser] = eraserWidth * max(zoom, 0.045)
+            }
+            updateTool()
+        }
+    }
     @Published var mode: StudioMode = .notes { didSet { updateTool() } }
     @Published var focusAreaID: UUID? = nil
     @Published var zoom: CGFloat = 1
     @Published var offset: CGPoint = .zero
+
+    // The user selects a NIB WIDTH IN SCREEN POINTS. Unlike existing ink,
+    // new strokes must not become visually wider when the viewport is zoomed.
+    // Preserve per-utensil targets and convert to canvas coordinates on zoom.
+    private var selectedScreenWidths: [CanvasTool: CGFloat] = [
+        .pen: 2.5, .pencil: 2.5, .marker: 5, .eraser: 12
+    ]
+    private var adjustingZoomNib = false
+    var selectedScreenNibWidth: CGFloat {
+        selectedScreenWidths[tool] ?? nominalToolWidth * max(zoom, 0.045)
+    }
+
+    // Read the configured width back from PencilKit. Some brush types clamp
+    // extreme sizes instead of honoring the requested value. This is a
+    // NOMINAL nib measurement (Pencil force/tilt still alters the rendered edge).
+    // Returning nil for custom tools avoids claiming that they share native
+    // PKInkingTool limits. The target selectedScreenNibWidth is preserved
+    // separately so a future high-width renderer can honor it.
+    var acceptedNativeScreenNibWidth: CGFloat? {
+        guard let view = canvas, let native = view.tool as? PKInkingTool else {
+            return nil
+        }
+        return native.width * view.zoomScale
+    }
+
+    // Use native PencilKit for all supported sizes: it's lower latency.
+    // Only engage an alternative Pencil-only path when the native tool
+    // rejects the requested on-screen width by a visible amount.
+    var needsScreenWidthInkOverlay: Bool {
+        guard let view = canvas, view.tool is PKInkingTool,
+              tool == .pen || tool == .pencil || (tool == .marker && !fixedHighlighter),
+              let accepted = acceptedNativeScreenNibWidth else { return false }
+        return abs(accepted - selectedScreenNibWidth) > 0.5
+    }
+
+    func setSelectedScreenNibWidth(_ screenPoints: CGFloat) {
+        guard tool != .capture, screenPoints.isFinite else { return }
+        selectedScreenWidths[tool] = max(0.4, min(500, screenPoints))
+        applyZoomCompensatedNib()
+    }
+
+    // Screen width = native PencilKit base width × canvas zoom. The same
+    // visible 20pt nib therefore uses 40 canvas points at 50% zoom, and
+    // 10 canvas points at 200% zoom. Existing strokes are never rescaled.
+    private func applyZoomCompensatedNib() {
+        guard tool != .capture, !adjustingZoomNib else { return }
+        adjustingZoomNib = true
+        defer { adjustingZoomNib = false }
+        let screen = selectedScreenNibWidth
+        let canvasWidth = screen / max(zoom, 0.045)
+        switch tool {
+        case .pen, .pencil:
+            strokeWidth = canvasWidth
+        case .marker:
+            if fixedHighlighter { markerWidth = canvasWidth }
+            else { strokeWidth = canvasWidth / 4 }
+        case .eraser:
+            eraserWidth = canvasWidth
+        case .capture:
+            break
+        }
+        updateTool()
+    }
 
     private(set) var initialDrawing = PKDrawing()
     weak var canvas: PKCanvasView?
@@ -313,6 +401,7 @@ final class CanvasStore: ObservableObject {
         // Pencil-only drawing rejects finger/palm ink. The system handles
         // single-finger scrolling and two-finger pinch on the main canvas.
         view.isScrollEnabled = true
+        view.isDirectionalLockEnabled = false
         view.panGestureRecognizer.minimumNumberOfTouches = 1
         // RestSafe constrains panning to a deliberate single finger; when off,
         // Navigate also permits two-finger panning. Native pinch remains enabled.
@@ -323,14 +412,25 @@ final class CanvasStore: ObservableObject {
     }
 
     private func configureNavigationRecognizers(_ view: PKCanvasView) {
-        let coveredByOverlay = tool == .capture || (tool == .marker && fixedHighlighter)
+        let coveredByOverlay = tool == .capture ||
+            (tool == .marker && fixedHighlighter) || needsScreenWidthInkOverlay
         view.panGestureRecognizer.isEnabled = !coveredByOverlay
         view.pinchGestureRecognizer?.isEnabled = !coveredByOverlay
     }
 
+    // One source of truth shared by PencilKit and the on-screen sizing preview.
+    // It returns the requested nominal width, before Apple Pencil force/tilt.
+    var nominalToolWidth: CGFloat {
+        switch tool {
+        case .marker:
+            return fixedHighlighter ? markerWidth : strokeWidth * 4
+        case .eraser: return eraserWidth
+        default: return strokeWidth
+        }
+    }
+
     func updateTool() {
         guard let view = canvas else { return }
-        configureNavigationRecognizers(view)
         switch tool {
         case .pen:
             let inkType: PKInkingTool.InkType
@@ -343,11 +443,14 @@ final class CanvasStore: ObservableObject {
         case .pencil: view.tool = PKInkingTool(.pencil, color: inkColor, width: strokeWidth)
         case .marker:
             // Native fallback keeps tilt behavior; the fixed-nib overlay commits its own vectors.
-            view.tool = PKInkingTool(.marker, color: inkColor.withAlphaComponent(0.52), width: strokeWidth * 4)
+            view.tool = PKInkingTool(.marker, color: inkColor.withAlphaComponent(0.52), width: nominalToolWidth)
         case .eraser:
             view.tool = PKEraserTool(eraserPrecision == .detail ? .bitmap : .vector, width: eraserWidth)
         case .capture: view.tool = PKLassoTool()
         }
+        // Decide the gesture owner from the NEW native tool's accepted width,
+        // not from the previous frame's pen or lasso configuration.
+        configureNavigationRecognizers(view)
     }
 
     // MARK: - Coordinate conversions for all overlay PencilKit interactions
@@ -420,6 +523,96 @@ final class CanvasStore: ObservableObject {
         isSaved = false
         scheduleSave()
         status = "Vertical marker saved as editable ink"
+    }
+
+    // Direct PKStrokePoint dimensions bypass PKInkingTool's base-nib clamp.
+    // The user's selected size is defined in *screen* points; writing data is
+    // stored in canvas coordinates, keeping source ink editable at any zoom.
+    // Pressure and Pencil azimuth/altitude are captured, not discarded.
+    func commitScreenWidthStroke(_ samples: [ScreenWidthInkSample], from overlay: UIView) {
+        guard let view = canvas, !samples.isEmpty,
+              tool == .pen || tool == .pencil || (tool == .marker && !fixedHighlighter)
+        else { return }
+        let baseline = selectedScreenNibWidth / max(view.zoomScale, 0.045)
+        let inkType: PKInkingTool.InkType
+        switch tool {
+        case .pen:
+            switch penProfile {
+            case .fluid: inkType = .pen
+            case .fountain: inkType = .fountainPen
+            case .monoline: inkType = .monoline
+            }
+        case .pencil: inkType = .pencil
+        case .marker: inkType = .marker
+        default: return
+        }
+
+        // PKStrokePath inputs are uniform cubic B-SPLINE CONTROL POINTS,
+        // not guaranteed rendered points. Two widely spaced controls produced
+        // giant overshooting strokes in the real simulator screenshots:
+        // 127pt request rendered ~48pt at 10.2% and ~334pt at 100% zoom.
+        // Resample sparse Pencil input in SCREEN space before converting to
+        // canvas coordinates, so the spline tracks the Pencil's actual path.
+        var dense: [ScreenWidthInkSample] = [samples[0]]
+        if samples.count > 1 {
+            for i in 1..<samples.count {
+                let previous = samples[i - 1]
+                let current = samples[i]
+                let deltaX = current.location.x - previous.location.x
+                let deltaY = current.location.y - previous.location.y
+                let distance = hypot(deltaX, deltaY)
+                let count = max(1, min(160, Int(ceil(distance / 5.0))))
+                for index in 1...count {
+                    let t = CGFloat(index) / CGFloat(count)
+                    dense.append(ScreenWidthInkSample(
+                        location: CGPoint(x: previous.location.x + deltaX * t,
+                                          y: previous.location.y + deltaY * t),
+                        time: previous.time + (current.time - previous.time) * Double(t),
+                        force: previous.force + (current.force - previous.force) * t,
+                        azimuth: previous.azimuth + (current.azimuth - previous.azimuth) * t,
+                        altitude: previous.altitude + (current.altitude - previous.altitude) * t))
+                }
+            }
+        }
+        // A dot or extremely short dash must still have a valid B-spline.
+        // Extra controls are subpixel and never represent extra visible ink.
+        while dense.count < 4, let last = dense.last {
+            dense.append(ScreenWidthInkSample(
+                location: CGPoint(x: last.location.x + 0.003,
+                                  y: last.location.y),
+                time: last.time + 0.001,
+                force: last.force, azimuth: last.azimuth, altitude: last.altitude))
+        }
+        let start = dense[0].time
+        var points: [PKStrokePoint] = []
+        points.reserveCapacity(dense.count)
+        for sample in dense {
+            guard let position = drawingPoint(sample.location, from: overlay, in: view) else { return }
+            // 0.5 force targets the selected nib. Force still varies the
+            // effective thickness. Rendered pixels are independently tested.
+            let pressure = min(1, max(0, sample.force))
+            let size = max(0.4, baseline * (0.70 + 0.60 * pressure))
+            points.append(PKStrokePoint(
+                location: position,
+                timeOffset: max(0, sample.time - start),
+                size: CGSize(width: size, height: size),
+                opacity: inkType == .marker ? 0.55 : 1,
+                force: pressure,
+                azimuth: sample.azimuth,
+                altitude: sample.altitude))
+        }
+        let color = inkType == .marker
+            ? inkColor.withAlphaComponent(0.52) : inkColor
+        let stroke = PKStroke(ink: PKInk(inkType, color: color),
+                              path: PKStrokePath(controlPoints: points, creationDate: Date()),
+                              transform: .identity, mask: nil)
+        checkpoint()
+        loading = true
+        view.drawing = PKDrawing(strokes: view.drawing.strokes + [stroke])
+        loading = false
+        isSaved = false
+        scheduleSave()
+        status = "Screen-width stroke saved as editable ink"
     }
 
     // Custom pinch is only used over full-screen Pencil overlays.
@@ -532,7 +725,11 @@ final class CanvasStore: ObservableObject {
     }
     func refreshViewport() {
         guard let view = canvas else { return }
-        zoom = view.zoomScale
+        let newZoom = view.zoomScale
+        if abs(newZoom - zoom) > 0.0001 {
+            zoom = newZoom
+            applyZoomCompensatedNib()
+        }
         offset = view.contentOffset
     }
     func worldCenter() -> CGPoint {
@@ -1016,6 +1213,21 @@ final class CanvasStore: ObservableObject {
     func removeFromStash(_ id: UUID) {
         stashedClipIDs.removeAll { $0 == id }
         saveIndex()
+    }
+
+    // Reordering only changes tab presentation order. A clip's original ink,
+    // vector file and image are never mutated.
+    @discardableResult
+    func moveStashedClip(_ sourceID: UUID, before destinationID: UUID) -> Bool {
+        guard sourceID != destinationID,
+              let sourceIndex = stashedClipIDs.firstIndex(of: sourceID),
+              stashedClipIDs.contains(destinationID) else { return false }
+        stashedClipIDs.remove(at: sourceIndex)
+        guard let destinationIndex = stashedClipIDs.firstIndex(of: destinationID) else { return false }
+        stashedClipIDs.insert(sourceID, at: destinationIndex)
+        saveIndex()
+        status = "Reordered saved handwriting tabs"
+        return true
     }
 
     @discardableResult

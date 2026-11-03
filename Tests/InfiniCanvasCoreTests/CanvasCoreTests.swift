@@ -181,6 +181,134 @@ final class CanvasCoreTests: XCTestCase {
         window.isHidden = true
     }
 
+    func testActualGlassMorphContainsRisingInkWithoutLargeBlackOverhang() {
+        // Prior simulator screenshot exposed a wide black oval OUTSIDE the
+        // Liquid Glass surface at 127pt. Test the actual two production Shapes
+        // together, in the same coordinate system, including right-edge
+        // displacement of the lower control. ClipShape is still required as a
+        // final guard, but large accidental cropping is itself a design bug.
+        for nib: CGFloat in [15, 60, 127] {
+            let trigger = CGRect(x: 908, y: 170, width: 84, height: 44)
+            let place = WidthMorphPlacement(
+                viewportWidth: 1024, trigger: trigger,
+                selectedWidth: nib, travel: 270)
+            let panel = CGRect(x: 0, y: 0, width: place.width, height: place.height)
+            let outer = LiquidSizeBubble(anchorX: place.anchorX).path(in: panel)
+            let topInset = min(31, max(12, 12 + nib * 0.14))
+            // Text header is about 13pt + 2pt spacing at this font size.
+            let innerRect = CGRect(x: 11, y: topInset + 15,
+                                   width: place.width - 22,
+                                   height: max(14, place.height - topInset - 26))
+            let line = LiquidPressureStroke(
+                tipWidth: nib,
+                baseOffset: place.anchorX - place.width / 2).path(in: innerRect)
+            var inkPixels = 0
+            var outsidePixels = 0
+            for xi in 0..<Int(place.width) {
+                for yi in 0..<Int(place.height) {
+                    let p = CGPoint(x: CGFloat(xi) + 0.5, y: CGFloat(yi) + 0.5)
+                    if line.contains(p) {
+                        inkPixels += 1
+                        if !outer.contains(p) { outsidePixels += 1 }
+                    }
+                }
+            }
+            XCTAssertGreaterThan(inkPixels, 0)
+            XCTAssertLessThan(CGFloat(outsidePixels) / CGFloat(max(inkPixels, 1)),
+                              0.10, "More than 10% of brush preview would be cut by glass")
+        }
+    }
+
+    func testLiquidPressureStrokeHasRoundFullWidthTipInsideGlass() {
+        for nib: CGFloat in [2.5, 15, 60, 127] {
+            // Geometry of the *actual production SwiftUI Shape*, not an HTML mock.
+            let bounds = CGRect(x: 0, y: 0, width: max(92, nib + 48), height: 140)
+            let shape = LiquidPressureStroke(tipWidth: nib).path(in: bounds).boundingRect
+            XCTAssertFalse(shape.isEmpty)
+            XCTAssertGreaterThanOrEqual(shape.minX, -0.01)
+            XCTAssertLessThanOrEqual(shape.maxX, bounds.maxX + 0.01)
+            XCTAssertGreaterThanOrEqual(shape.minY, -0.01)
+            XCTAssertLessThanOrEqual(shape.maxY, bounds.maxY + 0.01)
+            XCTAssertEqual(shape.width, nib, accuracy: 2,
+                           "Uppermost rounded mark should show selected on-screen width")
+        }
+    }
+
+    func testNativeMorphPlacementPreservesScreenBoundsAndOriginalPillAnchor() {
+        for viewportWidth: CGFloat in [768, 834, 1024, 1366] {
+            for selectedWidth: CGFloat in [2.5, 15, 60, 127, 160] {
+                let trigger = CGRect(x: viewportWidth - 137, y: 111,
+                                     width: 84, height: 44)
+                let placement = WidthMorphPlacement(
+                    viewportWidth: viewportWidth,
+                    trigger: trigger, selectedWidth: selectedWidth,
+                    travel: 290)
+                let left = placement.centerX - placement.width / 2
+                let right = placement.centerX + placement.width / 2
+                XCTAssertGreaterThanOrEqual(left, 8 - 0.01)
+                XCTAssertLessThanOrEqual(right, viewportWidth - 8 + 0.01)
+                XCTAssertEqual(left + placement.anchorX, trigger.midX,
+                               accuracy: 0.01, "Bubble base must stay on the original stationary pill")
+                XCTAssertGreaterThanOrEqual(placement.centerY - placement.height / 2,
+                                            29.9, "Don't clip into the status bar")
+            }
+        }
+    }
+
+    func testNominalToolWidthMatchesActualPencilKitConfiguration() {
+        let store = CanvasStore()
+        store.tool = .pen
+        store.setSelectedScreenNibWidth(8)
+        XCTAssertEqual(store.nominalToolWidth, 8)
+        store.tool = .pencil
+        store.setSelectedScreenNibWidth(8)
+        XCTAssertEqual(store.nominalToolWidth, 8)
+        store.tool = .marker
+        store.fixedHighlighter = false
+        store.setSelectedScreenNibWidth(32)
+        XCTAssertEqual(store.nominalToolWidth, 32,
+                       "Preview matches native marker nib after applying its 4× width multiplier")
+        store.fixedHighlighter = true
+        XCTAssertEqual(store.nominalToolWidth, store.markerWidth,
+                       "Fixed vertical highlighter uses its own nib geometry")
+        store.tool = .eraser
+        store.setSelectedScreenNibWidth(46)
+        XCTAssertEqual(store.nominalToolWidth, 46)
+    }
+
+    func testStashedTabsReorderWithoutChangingCanvasInk() throws {
+        let store = CanvasStore()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
+        let canvas = PKCanvasView(frame: window.bounds)
+        canvas.minimumZoomScale = 0.045
+        canvas.maximumZoomScale = 10
+        canvas.contentSize = CGSize(width: 12000, height: 12000)
+        window.addSubview(canvas)
+        let overlay = UIView(frame: window.bounds)
+        window.addSubview(overlay)
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+        store.attach(canvas)
+        store.tool = .capture
+        canvas.drawing = PKDrawing(strokes: [makeStroke(.pen, x: 200, y: 200)])
+        let original = canvas.drawing.dataRepresentation()
+        let outline = [CGPoint(x: 145, y: 150), CGPoint(x: 265, y: 150),
+                       CGPoint(x: 265, y: 255), CGPoint(x: 145, y: 255)]
+        store.captureLasso(outline, from: overlay)
+        let first = try XCTUnwrap(store.latestClip)
+        XCTAssertTrue(store.stashSelectedInk())
+        store.captureLasso(outline, from: overlay)
+        let second = try XCTUnwrap(store.latestClip)
+        XCTAssertTrue(store.stashSelectedInk())
+        XCTAssertEqual(store.stashedClips.suffix(2).map(\.id), [first.id, second.id])
+        XCTAssertTrue(store.moveStashedClip(second.id, before: first.id))
+        XCTAssertEqual(store.stashedClips.suffix(2).map(\.id), [second.id, first.id])
+        XCTAssertFalse(store.moveStashedClip(second.id, before: second.id))
+        XCTAssertEqual(canvas.drawing.dataRepresentation(), original,
+                       "Reordering tabs must never modify source handwriting")
+        window.isHidden = true
+    }
+
     func testStashShrinksOnCornerApproachWithoutFalseFarAwayHit() {
         let target = CGRect(x: 780, y: 105, width: 150, height: 38)
         let far = CGRect(x: 100, y: 500, width: 120, height: 90)
@@ -195,7 +323,266 @@ final class CanvasCoreTests: XCTestCase {
         XCTAssertEqual(LassoTouchView.proximity(of: overlapping, to: .null), 0)
     }
 
-    func testBaseToolWidthIsPreservedAcrossZoomChanges() throws {
+    private func assertScreenWidthIsActuallyRepresented(
+        _ store: CanvasStore, canvas: PKCanvasView, overlay: UIView,
+        desired: CGFloat, file: StaticString = #filePath, line: UInt = #line
+    ) {
+        if store.needsScreenWidthInkOverlay {
+            // Native ink clamped. The custom path must store the user-facing
+            // screen-space size, not just change a UI number.
+            let before = canvas.drawing.strokes.count
+            let sampleTime = Date().timeIntervalSince1970
+            let points = [
+                ScreenWidthInkSample(location: CGPoint(x: 300, y: 325),
+                                     time: sampleTime, force: 0.5,
+                                     azimuth: 0, altitude: .pi / 2),
+                ScreenWidthInkSample(location: CGPoint(x: 400, y: 325),
+                                     time: sampleTime + 0.01, force: 0.5,
+                                     azimuth: 0, altitude: .pi / 2)
+            ]
+            store.commitScreenWidthStroke(points, from: overlay)
+            XCTAssertEqual(canvas.drawing.strokes.count, before + 1, file: file, line: line)
+            guard let stroke = canvas.drawing.strokes.last, stroke.path.count > 0 else {
+                XCTFail("PencilKit did not preserve the custom editable stroke", file: file, line: line)
+                return
+            }
+            XCTAssertEqual(stroke.path[0].size.width * canvas.zoomScale,
+                           desired, accuracy: max(0.3, desired * 0.02),
+                           "Actual editable PencilKit point size must equal requested screen size",
+                           file: file, line: line)
+        } else if let native = canvas.tool as? PKInkingTool {
+            XCTAssertEqual(native.width * canvas.zoomScale, desired, accuracy: 0.12,
+                           "Use native low-latency PencilKit when its actual accepted size works",
+                           file: file, line: line)
+        }
+    }
+
+    func testSelectedScreenWidthRemainsStableAtAllZoomLevels() throws {
+        let store = CanvasStore()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
+        let canvas = PKCanvasView(frame: window.bounds)
+        canvas.minimumZoomScale = 0.045
+        canvas.maximumZoomScale = 10
+        canvas.contentSize = CGSize(width: 12000, height: 12000)
+        window.addSubview(canvas)
+        let overlay = UIView(frame: window.bounds)
+        window.addSubview(overlay)
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+        store.attach(canvas)
+        store.tool = .pen
+        store.setSelectedScreenNibWidth(20)
+        for zoom: CGFloat in [0.102, 0.5, 1, 2, 5] {
+            store.zoomTo(zoom)
+            XCTAssertEqual(store.zoom, zoom, accuracy: 0.02)
+            XCTAssertEqual(store.selectedScreenNibWidth, 20, accuracy: 0.02)
+            XCTAssertEqual(store.strokeWidth, 20 / zoom, accuracy: 0.03)
+            assertScreenWidthIsActuallyRepresented(
+                store, canvas: canvas, overlay: overlay, desired: 20)
+        }
+        // Changing brush size never rescales or loses existing strokes.
+        let original = PKDrawing(strokes: [makeStroke(.pen, x: 240, y: 300)])
+        canvas.drawing = original
+        store.zoomTo(2)
+        XCTAssertEqual(canvas.drawing.dataRepresentation(), original.dataRepresentation())
+        window.isHidden = true
+    }
+
+    func testMarkerPenPencilAndEraserNibScreenSizeAtZoom() throws {
+        let store = CanvasStore()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
+        let canvas = PKCanvasView(frame: window.bounds)
+        canvas.minimumZoomScale = 0.045
+        canvas.maximumZoomScale = 10
+        canvas.contentSize = CGSize(width: 12000, height: 12000)
+        window.addSubview(canvas)
+        let overlay = UIView(frame: window.bounds)
+        window.addSubview(overlay)
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+        store.attach(canvas)
+
+        for tool in [CanvasTool.pen, .pencil, .marker, .eraser] {
+            store.tool = tool
+            if tool == .marker { store.fixedHighlighter = false }
+            store.setSelectedScreenNibWidth(12)
+            for zoom: CGFloat in [0.5, 1, 2] {
+                store.zoomTo(zoom)
+                XCTAssertEqual(store.selectedScreenNibWidth, 12, accuracy: 0.05)
+                XCTAssertEqual(store.nominalToolWidth * store.zoom, 12, accuracy: 0.05)
+                if tool != .eraser {
+                    assertScreenWidthIsActuallyRepresented(
+                        store, canvas: canvas, overlay: overlay, desired: 12)
+                } else {
+                    XCTAssertTrue(canvas.tool is PKEraserTool,
+                                  "Existing native eraser remains intact")
+                }
+            }
+        }
+        window.isHidden = true
+    }
+
+    func testOversizePencilPreviewReflectsActualPressureAndSingleDabs() {
+        // This tests real UIKit path geometry, not just the width label.
+        // Screen-space previews must reflect the exact pressure model that
+        // commitScreenWidthStroke writes into editable PKStrokePoints.
+        let low = ScreenWidthInkSample(
+            location: CGPoint(x: 150, y: 160), time: 0, force: 0.2,
+            azimuth: 0, altitude: .pi / 2)
+        let high = ScreenWidthInkSample(
+            location: CGPoint(x: 300, y: 160), time: 0.03, force: 0.8,
+            azimuth: 0, altitude: .pi / 2)
+        let size: CGFloat = 127
+        let lowWidth = ScreenWidthInkTouchView.forceAdjustedScreenWidth(size, force: 0.2)
+        let highWidth = ScreenWidthInkTouchView.forceAdjustedScreenWidth(size, force: 0.8)
+        XCTAssertEqual(lowWidth, 127 * 0.82, accuracy: 0.01)
+        XCTAssertEqual(highWidth, 127 * 1.18, accuracy: 0.01)
+        XCTAssertGreaterThan(highWidth, lowWidth)
+
+        let single = ScreenWidthInkTouchView.livePressurePath(
+            [low], selectedWidth: size)
+        XCTAssertEqual(single.bounds.width, lowWidth, accuracy: 0.03,
+                       "The first stationary Pencil touch must render a full dot")
+        XCTAssertEqual(single.bounds.height, lowWidth, accuracy: 0.03)
+
+        let sweep = ScreenWidthInkTouchView.livePressurePath(
+            [low, high], selectedWidth: size)
+        XCTAssertGreaterThanOrEqual(sweep.bounds.height, highWidth - 0.1,
+                                    "Live pressure stroke must expand rather than staying flat")
+        XCTAssertGreaterThan(sweep.bounds.width, 150,
+                             "Sample-to-sample sweep should cover the entire moving stroke")
+    }
+
+    func testActualPencilKitRasterWidthAtDeepAndNormalZoom() throws {
+        // Render the REAL PKDrawing using Apple's rasterizer, not merely the
+        // stored PKStrokePoint nominal dimensions. Preserve both full-size
+        // raster results as named XCTest attachments for independent review.
+        let store = CanvasStore()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
+        let canvas = PKCanvasView(frame: window.bounds)
+        canvas.minimumZoomScale = 0.045
+        canvas.maximumZoomScale = 10
+        canvas.contentSize = CGSize(width: 12000, height: 12000)
+        window.addSubview(canvas)
+        let overlay = UIView(frame: window.bounds)
+        window.addSubview(overlay)
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+        store.attach(canvas)
+        store.tool = .pen
+        store.inkColor = UIColor(red: 0.03, green: 0.36, blue: 0.39, alpha: 1)
+        for zoom: CGFloat in [0.102, 1.0] {
+            canvas.drawing = PKDrawing()
+            store.zoomTo(zoom)
+            store.setSelectedScreenNibWidth(127)
+            let time = Date().timeIntervalSince1970
+            store.commitScreenWidthStroke([
+                ScreenWidthInkSample(location: CGPoint(x: 300, y: 325),
+                    time: time, force: 0.5, azimuth: 0, altitude: .pi / 2),
+                ScreenWidthInkSample(location: CGPoint(x: 440, y: 325),
+                    time: time + 0.025, force: 0.5,
+                    azimuth: 0, altitude: .pi / 2)
+            ], from: overlay)
+            let stroke = try XCTUnwrap(canvas.drawing.strokes.last)
+            XCTAssertGreaterThanOrEqual(stroke.path.count, 20,
+                "Sparse input must be resampled into stable PKStrokePath B-spline controls")
+            let lastPoint = stroke.path[stroke.path.count - 1]
+            let midpoint = CGPoint(
+                x: (stroke.path[0].location.x + lastPoint.location.x) / 2,
+                y: (stroke.path[0].location.y + lastPoint.location.y) / 2)
+            let worldRect = CGRect(x: midpoint.x - 110 / zoom,
+                                   y: midpoint.y - 110 / zoom,
+                                   width: 220 / zoom, height: 220 / zoom)
+            let raster = canvas.drawing.image(from: worldRect, scale: zoom)
+
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            format.opaque = true
+            let preview = UIGraphicsImageRenderer(
+                size: CGSize(width: 220, height: 220), format: format
+            ).image { context in
+                UIColor.white.setFill()
+                context.fill(CGRect(x: 0, y: 0, width: 220, height: 220))
+                raster.draw(in: CGRect(x: 0, y: 0, width: 220, height: 220))
+            }
+            let screenshot = XCTAttachment(image: preview)
+            screenshot.name = zoom < 0.2
+                ? "Real-PencilKit-raster-127pt-zoom-10-percent"
+                : "Real-PencilKit-raster-127pt-zoom-100-percent"
+            screenshot.lifetime = .keepAlways
+            add(screenshot)
+
+            guard let cg = preview.cgImage,
+                  let data = cg.dataProvider?.data,
+                  let bytes = CFDataGetBytePtr(data) else {
+                XCTFail("Real PKDrawing rasterizer returned no inspectable bytes")
+                continue
+            }
+            // At the centre of the horizontal pen path, any non-white pixel
+            // belongs to the actual rendered ink (not an interface mock).
+            // The renderer is white-backed solely for deterministic sampling.
+            let bpp = cg.bitsPerPixel / 8
+            XCTAssertGreaterThanOrEqual(bpp, 3)
+            let sampleX = cg.width / 2
+            var colouredRows = 0
+            for y in 0..<cg.height {
+                let index = y * cg.bytesPerRow + sampleX * bpp
+                let darkness = Int(bytes[index]) + Int(bytes[index + 1])
+                               + Int(bytes[index + 2])
+                if darkness < 730 { colouredRows += 1 }
+            }
+            print("ACTUAL_PENCILKIT_RASTER zoom=\(zoom) colouredRows=\(colouredRows) desired=127")
+            XCTAssertGreaterThan(colouredRows, 20,
+                                 "A hairline stroke is not an acceptable oversized nib")
+            XCTAssertEqual(CGFloat(colouredRows), 127, accuracy: 15,
+                           "Measured REAL PencilKit raster should match 127 screen pt")
+        }
+        window.isHidden = true
+    }
+
+    func testExtremeScreenWidthUsesEditablePressureSensitivePKStroke() throws {
+        let store = CanvasStore()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
+        let canvas = PKCanvasView(frame: window.bounds)
+        canvas.minimumZoomScale = 0.045
+        canvas.maximumZoomScale = 10
+        canvas.contentSize = CGSize(width: 12000, height: 12000)
+        window.addSubview(canvas)
+        let overlay = UIView(frame: window.bounds)
+        window.addSubview(overlay)
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+        store.attach(canvas)
+        store.tool = .pen
+        store.setSelectedScreenNibWidth(127)
+        for zoom: CGFloat in [0.102, 0.5, 1, 2] {
+            store.zoomTo(zoom)
+            XCTAssertTrue(store.needsScreenWidthInkOverlay,
+                          "Oversized nib must select the editable width renderer")
+            let before = canvas.drawing.strokes.count
+            let time = Date().timeIntervalSince1970
+            store.commitScreenWidthStroke([
+                ScreenWidthInkSample(location: CGPoint(x: 300, y: 300),
+                    time: time, force: 0.2, azimuth: 0, altitude: .pi / 2),
+                ScreenWidthInkSample(location: CGPoint(x: 420, y: 300),
+                    time: time + 0.015, force: 0.8, azimuth: 0, altitude: .pi / 3)
+            ], from: overlay)
+            XCTAssertEqual(canvas.drawing.strokes.count, before + 1)
+            let stroke = try XCTUnwrap(canvas.drawing.strokes.last)
+            let lastPoint = stroke.path[stroke.path.count - 1]
+            XCTAssertGreaterThan(lastPoint.size.width, stroke.path[0].size.width,
+                                 "Force should modify effective nib width")
+            XCTAssertEqual(stroke.path[0].size.width * zoom,
+                           127 * (0.70 + 0.60 * 0.2), accuracy: 2)
+            XCTAssertEqual(lastPoint.size.width * zoom,
+                           127 * (0.70 + 0.60 * 0.8), accuracy: 2)
+            XCTAssertGreaterThan(stroke.renderBounds.height * zoom, 20,
+                                 "Saved PencilKit ink should have visible thickness")
+        }
+        window.isHidden = true
+    }
+
+    func testRestSafeInsertedLinkCanBeTrashedAndRecoveredWithoutDeletingInk() throws {
         let store = CanvasStore()
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
         let canvas = PKCanvasView(frame: window.bounds)
@@ -206,16 +593,72 @@ final class CanvasCoreTests: XCTestCase {
         window.makeKeyAndVisible()
         window.layoutIfNeeded()
         store.attach(canvas)
+        XCTAssertTrue(store.restSafe)
+
+        canvas.drawing = PKDrawing(strokes: [makeStroke(.pen, x: 180, y: 190)])
+        let original = canvas.drawing.dataRepresentation()
+        store.addTextNote("https://example.com/course/reading")
+        let note = try XCTUnwrap(store.activeTextNotes.last)
+        XCTAssertTrue(note.body.contains("https://"))
+
+        store.trashTextNote(note)
+        XCTAssertFalse(store.activeTextNotes.contains(where: { $0.id == note.id }))
+        XCTAssertTrue(store.discardedTextNotes.contains(where: { $0.id == note.id }))
+        XCTAssertEqual(canvas.drawing.dataRepresentation(), original,
+                       "Deleting an inserted link must not delete PencilKit ink")
+        let backupURL = try XCTUnwrap(store.exportCompleteBackup())
+        let backup = try JSONDecoder().decode(CompleteBackup.self,
+                                              from: Data(contentsOf: backupURL))
+        XCTAssertEqual(backup.index.textNotes?.first(where: { $0.id == note.id })?.isTrashed, true,
+                       "The soft-deleted note should survive backup/restart")
+        store.restoreTextNote(note)
+        XCTAssertTrue(store.activeTextNotes.contains(where: { $0.id == note.id }))
+        XCTAssertEqual(canvas.drawing.dataRepresentation(), original)
+        window.isHidden = true
+    }
+
+    func testFingerPanningRemainsAvailableAfterRestSafeAndOverlayToolSwitches() {
+        let store = CanvasStore()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
+        let canvas = PKCanvasView(frame: window.bounds)
+        canvas.minimumZoomScale = 0.045
+        canvas.maximumZoomScale = 10
+        canvas.contentSize = CGSize(width: 12000, height: 12000)
+        window.addSubview(canvas)
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+        store.attach(canvas)
+
+        XCTAssertTrue(canvas.isScrollEnabled)
+        XCTAssertFalse(canvas.isDirectionalLockEnabled)
+        XCTAssertTrue(canvas.panGestureRecognizer.isEnabled)
+        store.restSafe = false
+        store.restSafe = true
+        XCTAssertTrue(canvas.panGestureRecognizer.isEnabled)
+        XCTAssertFalse(canvas.isDirectionalLockEnabled)
+        store.tool = .capture
+        XCTAssertFalse(canvas.panGestureRecognizer.isEnabled,
+                       "Lasso overlay temporarily owns finger navigation")
+        store.tool = .marker
+        store.fixedHighlighter = true
+        XCTAssertFalse(canvas.panGestureRecognizer.isEnabled,
+                       "Fixed marker overlay temporarily owns finger navigation")
         store.tool = .pen
-        store.strokeWidth = 45
-        for zoom: CGFloat in [0.25, 0.5, 1, 2, 5] {
-            store.zoomTo(zoom)
-            XCTAssertEqual(store.strokeWidth, 45,
-                           "Changing zoom must never silently overwrite the user's base pen width")
-            XCTAssertEqual(store.zoom, zoom, accuracy: 0.02)
+        XCTAssertTrue(canvas.panGestureRecognizer.isEnabled,
+                      "Switching back to normal pen restores native finger navigation")
+
+        for overlay in [LassoTouchView(frame: window.bounds),
+                        FixedNibTouchView(frame: window.bounds)] as [UIView] {
+            let pan = try? XCTUnwrap(overlay.gestureRecognizers?.compactMap {
+                $0 as? UIPanGestureRecognizer
+            }.first)
+            XCTAssertEqual(pan?.minimumNumberOfTouches, 1)
+            XCTAssertEqual(pan?.maximumNumberOfTouches, 2,
+                           "Two fingers must not cancel navigation over full-screen overlays")
         }
         window.isHidden = true
     }
+
 
     func testLassoMoveCommitsAtCorrectZoomThenCanBeSelectedAgain() throws {
         let store = CanvasStore()
@@ -312,8 +755,26 @@ final class CanvasCoreTests: XCTestCase {
         XCTAssertFalse(canvas.panGestureRecognizer.isEnabled, "Lasso overlay owns finger navigation")
         XCTAssertFalse(canvas.pinchGestureRecognizer?.isEnabled ?? true, "Lasso overlay owns pinch zoom")
         store.tool = .pen
-        XCTAssertTrue(canvas.panGestureRecognizer.isEnabled)
-        XCTAssertTrue(canvas.pinchGestureRecognizer?.isEnabled ?? false)
+        if store.needsScreenWidthInkOverlay {
+            // At 1000% even a modest 2.5 screen-pt pen may be below the
+            // native PKInkingTool minimum. The full-screen custom Pencil
+            // view intentionally owns navigation; expecting the *covered*
+            // native recognizers to be enabled is incorrect.
+            XCTAssertFalse(canvas.panGestureRecognizer.isEnabled)
+            XCTAssertFalse(canvas.pinchGestureRecognizer?.isEnabled ?? true)
+            let overlay = ScreenWidthInkTouchView(frame: window.bounds)
+            let pan = overlay.gestureRecognizers?
+                .compactMap { $0 as? UIPanGestureRecognizer }.first
+            let pinch = overlay.gestureRecognizers?
+                .compactMap { $0 as? UIPinchGestureRecognizer }.first
+            XCTAssertNotNil(pan, "Custom nib path must also provide finger navigation")
+            XCTAssertNotNil(pinch, "Custom nib path must also provide pinch zoom")
+            XCTAssertEqual(pan?.minimumNumberOfTouches, 1)
+            XCTAssertEqual(pan?.maximumNumberOfTouches, 2)
+        } else {
+            XCTAssertTrue(canvas.panGestureRecognizer.isEnabled)
+            XCTAssertTrue(canvas.pinchGestureRecognizer?.isEnabled ?? false)
+        }
     }
 
     func testActualRootViewLaunchesWithVisibleControlsAndCanvas() async throws {
