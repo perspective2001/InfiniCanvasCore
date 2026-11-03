@@ -1173,6 +1173,50 @@ struct ContentView: View {
             store.setSelectedScreenNibWidth(2.5 + fraction * 124.5)
             widthMorphTravel = 20 + fraction * 270
             widthPanelExpanded = true
+        } else if let inkArgument = args.first(where: {
+            $0.hasPrefix("--infini-visual-ink=")
+        }) {
+            // DEBUG-only native raster fixture: the SAME editable PKStroke
+            // engine used by the app, displayed at the supplied real zoom.
+            // It never runs in a user's normal launch or a release build.
+            let parts = inkArgument
+                .replacingOccurrences(of: "--infini-visual-ink=", with: "")
+                .split(separator: ":")
+            if parts.count == 2,
+               let width = Double(parts[0]),
+               let zoom = Double(parts[1]) {
+                Task { @MainActor in
+                    for _ in 0..<25 {
+                        if store.canvas?.window != nil { break }
+                        try? await Task.sleep(nanoseconds: 150_000_000)
+                    }
+                    guard let canvas = store.canvas, let window = canvas.window else {
+                        print("VISUAL-INK: native canvas never attached")
+                        return
+                    }
+                    store.tool = .pen
+                    store.inkColor = UIColor(red: 0.07, green: 0.40, blue: 0.43, alpha: 1)
+                    store.zoomTo(CGFloat(zoom))
+                    store.setSelectedScreenNibWidth(CGFloat(width))
+                    // Simulator fixture only; real user files are never reset.
+                    canvas.drawing = PKDrawing()
+                    let source = UIView(frame: window.bounds)
+                    window.addSubview(source)
+                    let now = Date().timeIntervalSince1970
+                    store.commitScreenWidthStroke([
+                        ScreenWidthInkSample(
+                            location: CGPoint(x: 170, y: 375),
+                            time: now, force: 0.5,
+                            azimuth: 0, altitude: .pi / 2),
+                        ScreenWidthInkSample(
+                            location: CGPoint(x: 520, y: 375),
+                            time: now + 0.08, force: 0.5,
+                            azimuth: 0, altitude: .pi / 2)
+                    ], from: source)
+                    source.removeFromSuperview()
+                    print("VISUAL-INK: requested \(width) screen pt, zoom \(zoom), actual strokes \(canvas.drawing.strokes.count)")
+                }
+            }
         } else if args.contains("--infini-visual-morph-animation") {
             Task { @MainActor in
                 store.tool = .pen
