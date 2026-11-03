@@ -369,6 +369,37 @@ final class CanvasCoreTests: XCTestCase {
         window.isHidden = true
     }
 
+    func testOversizePencilPreviewReflectsActualPressureAndSingleDabs() {
+        // This tests real UIKit path geometry, not just the width label.
+        // Screen-space previews must reflect the exact pressure model that
+        // commitScreenWidthStroke writes into editable PKStrokePoints.
+        let low = ScreenWidthInkSample(
+            location: CGPoint(x: 150, y: 160), time: 0, force: 0.2,
+            azimuth: 0, altitude: .pi / 2)
+        let high = ScreenWidthInkSample(
+            location: CGPoint(x: 300, y: 160), time: 0.03, force: 0.8,
+            azimuth: 0, altitude: .pi / 2)
+        let size: CGFloat = 127
+        let lowWidth = ScreenWidthInkTouchView.forceAdjustedScreenWidth(size, force: 0.2)
+        let highWidth = ScreenWidthInkTouchView.forceAdjustedScreenWidth(size, force: 0.8)
+        XCTAssertEqual(lowWidth, 127 * 0.82, accuracy: 0.01)
+        XCTAssertEqual(highWidth, 127 * 1.18, accuracy: 0.01)
+        XCTAssertGreaterThan(highWidth, lowWidth)
+
+        let single = ScreenWidthInkTouchView.livePressurePath(
+            [low], selectedWidth: size)
+        XCTAssertEqual(single.bounds.width, lowWidth, accuracy: 0.03,
+                       "The first stationary Pencil touch must render a full dot")
+        XCTAssertEqual(single.bounds.height, lowWidth, accuracy: 0.03)
+
+        let sweep = ScreenWidthInkTouchView.livePressurePath(
+            [low, high], selectedWidth: size)
+        XCTAssertGreaterThanOrEqual(sweep.bounds.height, highWidth - 0.1,
+                                    "Live pressure stroke must expand rather than staying flat")
+        XCTAssertGreaterThan(sweep.bounds.width, 150,
+                             "Sample-to-sample sweep should cover the entire moving stroke")
+    }
+
     func testExtremeScreenWidthUsesEditablePressureSensitivePKStroke() throws {
         let store = CanvasStore()
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
