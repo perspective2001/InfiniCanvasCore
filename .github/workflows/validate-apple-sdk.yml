@@ -183,6 +183,29 @@ jobs:
               'Not a Siri-match claim. Not physical Apple Pencil input verification.\\n'
               'Do not approve until actual frames and movie are opened and assessed.\\n')
           print('REAL NATIVE MORPH VIDEO:',movie,movie.stat().st_size,flush=True)
+          # This captures the ACTUAL PencilKit rasterized editable stroke,
+          # not just the requested in-memory PKStrokePoint sizes. Compare the
+          # visible ~127pt mark at 10.2% and 100% canvas zoom for size drift.
+          for zoom_label, zoom in [('0102','0.102'), ('100','1.0')]:
+              subprocess.run(['xcrun','simctl','terminate',sid,
+                              'com.perspective2001.infini-canvas.native'],
+                             timeout=25,check=False)
+              cmd('xcrun','simctl','launch',sid,
+                  'com.perspective2001.infini-canvas.native',
+                  '--infini-visual-ink=127:'+zoom,seconds=85)
+              time.sleep(3)
+              ink_shot=dest/('native-editable-ink-127-zoom-'+zoom_label+'.png')
+              cmd('xcrun','simctl','io',sid,'screenshot','--type=png',
+                  str(ink_shot),seconds=35)
+              if ink_shot.stat().st_size<20000:
+                  raise RuntimeError('Missing real PencilKit ink screenshot at '+zoom)
+              print('REAL EDITABLE INK AT ZOOM',zoom,'bytes',ink_shot.stat().st_size,flush=True)
+          (dest/'ink-capture-scope.txt').write_text(
+              'Source SHA: '+os.environ['GITHUB_SHA']+'\\n'
+              'Actual native PKStrokePoint ink at 127 nominal screen points.\\n'
+              'PNG captured at 10.2 percent and 100 percent zoom.\\n'
+              'Rendered pixels must be inspected and compared; drawing size is NOT accepted by assertion alone.\\n'
+              'Physical Pencil force/tilt latency still requires device verification.\\n')
           PY
       - name: Upload native iPad screenshot for visual inspection
         if: always()
