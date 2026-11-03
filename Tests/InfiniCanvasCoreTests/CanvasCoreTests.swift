@@ -446,10 +446,12 @@ final class CanvasCoreTests: XCTestCase {
                     azimuth: 0, altitude: .pi / 2)
             ], from: overlay)
             let stroke = try XCTUnwrap(canvas.drawing.strokes.last)
-            XCTAssertEqual(stroke.path.count, 2)
+            XCTAssertGreaterThanOrEqual(stroke.path.count, 20,
+                "Sparse input must be resampled into stable PKStrokePath B-spline controls")
+            let lastPoint = stroke.path[stroke.path.count - 1]
             let midpoint = CGPoint(
-                x: (stroke.path[0].location.x + stroke.path[1].location.x) / 2,
-                y: (stroke.path[0].location.y + stroke.path[1].location.y) / 2)
+                x: (stroke.path[0].location.x + lastPoint.location.x) / 2,
+                y: (stroke.path[0].location.y + lastPoint.location.y) / 2)
             let worldRect = CGRect(x: midpoint.x - 110 / zoom,
                                    y: midpoint.y - 110 / zoom,
                                    width: 220 / zoom, height: 220 / zoom)
@@ -529,11 +531,12 @@ final class CanvasCoreTests: XCTestCase {
             ], from: overlay)
             XCTAssertEqual(canvas.drawing.strokes.count, before + 1)
             let stroke = try XCTUnwrap(canvas.drawing.strokes.last)
-            XCTAssertGreaterThan(stroke.path[1].size.width, stroke.path[0].size.width,
+            let lastPoint = stroke.path[stroke.path.count - 1]
+            XCTAssertGreaterThan(lastPoint.size.width, stroke.path[0].size.width,
                                  "Force should modify effective nib width")
             XCTAssertEqual(stroke.path[0].size.width * zoom,
                            127 * (0.70 + 0.60 * 0.2), accuracy: 2)
-            XCTAssertEqual(stroke.path[1].size.width * zoom,
+            XCTAssertEqual(lastPoint.size.width * zoom,
                            127 * (0.70 + 0.60 * 0.8), accuracy: 2)
             XCTAssertGreaterThan(stroke.renderBounds.height * zoom, 20,
                                  "Saved PencilKit ink should have visible thickness")
