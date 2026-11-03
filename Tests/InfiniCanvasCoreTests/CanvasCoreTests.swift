@@ -491,7 +491,7 @@ final class CanvasCoreTests: XCTestCase {
                                + Int(bytes[index + 2])
                 if darkness < 730 { colouredRows += 1 }
             }
-            print("ACTUAL_PENCILKIT_RASTER zoom=\\(zoom) colouredRows=\\(colouredRows) desired=127")
+            print("ACTUAL_PENCILKIT_RASTER zoom=\(zoom) colouredRows=\(colouredRows) desired=127")
             XCTAssertGreaterThan(colouredRows, 20,
                                  "A hairline stroke is not an acceptable oversized nib")
             XCTAssertEqual(CGFloat(colouredRows), 127, accuracy: 15,
