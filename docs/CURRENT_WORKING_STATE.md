@@ -1,5 +1,7 @@
 # CURRENT WORKING STATE — InfiniCanvas
 
+**Nov 4 transfer to Work:** All previous high-priority user requests, exact development branch/SHA, tests and native-visual blockers, and original Windows AppRelay workflow are consolidated in [WORK_HANDOFF_2026-11-04.md](WORK_HANDOFF_2026-11-04.md). Read it with [ACCEPTANCE_LEDGER.md](ACCEPTANCE_LEDGER.md) before changing code. No stable update has been released. This is a documentation handoff, not a code approval.
+
 **Nov 3 quick resume:** Start with [the permanent acceptance ledger](ACCEPTANCE_LEDGER.md). It records **all unfinished user requests** and evidence checks. Current unreleased experiment is draft [PR #29](https://github.com/perspective2001/InfiniCanvasCore/pull/29); `main` contains only the previously existing application source and documentation, not an approved release. Last reported installed preview source version: `1.0.5`, exact installed build/SHA unknown. The user's local **AppRelay v3** already exists; new duplicate scripts were removed from the experiment. No new build may be called done without latest-SHA CI and genuine iPad Pencil Pro acceptance.
 *Always read this one page before an InfiniCanvas edit; update only when a decision or verified state changes. Last updated 2026-11-01.*
 
