@@ -73,7 +73,10 @@ jobs:
       # simulator by running actual PencilKit tests. Use THAT simulator for
       # compositor screenshots; the custom Xcode27 host runner stalled on boot.
       - name: Build actual native host and capture real iPad screen (same tested SDK)
-        timeout-minutes: 7
+        # Capture candidate visuals even when a separate width assertion fails.
+        # CI remains RED; screenshots diagnose failures, never bypass them.
+        if: always()
+        timeout-minutes: 14
         shell: bash
         run: |
           set -euo pipefail
@@ -96,14 +99,37 @@ jobs:
                    if 'iPad' in d['name'] and d.get('isAvailable',True)]
           if not options: raise RuntimeError('No iPad Simulator on tested iOS26 runner')
           sim=next((d for d in options if d['state']=='Booted'),options[0])
+          (dest/'visual-review-info.txt').write_text(
+              'Source SHA: '+os.environ['GITHUB_SHA']+'\\n'
+              'Capture: PENDING; native app must launch before review\\n'
+              'Motion: NOT CAPTURED\\n')
           sid=sim['udid']
           def cmd(*args,seconds=55):
               print('VISUAL-CAPTURE:',*args,flush=True)
               return subprocess.run(args,timeout=seconds,check=True)
           if sim['state']!='Booted': cmd('xcrun','simctl','boot',sid,seconds=50)
-          cmd('xcrun','simctl','bootstatus',sid,'-b',seconds=55)
-          cmd('xcrun','simctl','install',sid,os.environ['APP'],seconds=45)
-          cmd('xcrun','simctl','launch',sid,'com.perspective2001.infini-canvas.native',seconds=35)
+          # Boot occasionally takes >55s on GitHub macOS runners after XCTest.
+          # A simulator startup timeout is infrastructure failure, not a Swift
+          # compilation or visual-acceptance failure. Preserve the diagnostic
+          # manifest, then fail openly rather than silently accepting no image.
+          try:
+              cmd('xcrun','simctl','bootstatus',sid,'-b',seconds=150)
+          except (subprocess.TimeoutExpired, subprocess.CalledProcessError):
+              try:
+                  diagnostic = subprocess.run(
+                      ['xcrun','simctl','list','devices','available'],
+                      capture_output=True, text=True, timeout=20)
+                  details=diagnostic.stdout+'\\n'+diagnostic.stderr
+              except subprocess.TimeoutExpired:
+                  details='Simulator control service did not respond within 20s'
+              (dest/'simulator-startup-failure.txt').write_text(
+                  'Simulator: '+sim['name']+' ['+sid+']\\n'
+                  'Runner: '+os.environ.get('RUNNER_NAME','unknown')+'\\n'
+                  'Devices: '+details)
+              print('::error::iPad Simulator failed to boot; capture NOT verified',flush=True)
+              raise
+          cmd('xcrun','simctl','install',sid,os.environ['APP'],seconds=115)
+          cmd('xcrun','simctl','launch',sid,'com.perspective2001.infini-canvas.native',seconds=80)
           time.sleep(5)
           shot=dest/'native-ipad-root.png'
           cmd('xcrun','simctl','io',sid,'screenshot','--type=png',str(shot),seconds=30)
@@ -116,6 +142,53 @@ jobs:
               'Visual acceptance: UNREVIEWED - requires human/model opening this image\\n'
               'Motion: NOT CAPTURED; this screenshot proves only resting UI\\n')
           print('REAL NATIVE IPAD SCREENSHOT:',shot,'bytes:',shot.stat().st_size,flush=True)
+          # Native candidate-state capture. These arguments are recognized only
+          # by the DEBUG application view, not by release installations.
+          # Static frames test shape and positioning; video shows the app's
+          # actual SwiftUI animation state path, NOT a physical Pencil gesture.
+          for percentage in (25, 60, 100):
+              subprocess.run(['xcrun','simctl','terminate',sid,
+                              'com.perspective2001.infini-canvas.native'],
+                             timeout=25,check=False)
+              cmd('xcrun','simctl','launch',sid,
+                  'com.perspective2001.infini-canvas.native',
+                  '--infini-visual-morph='+str(percentage), seconds=85)
+              time.sleep(3)
+              state_shot=dest/('native-width-morph-'+str(percentage)+'.png')
+              cmd('xcrun','simctl','io',sid,'screenshot','--type=png',
+                  str(state_shot),seconds=30)
+              if state_shot.stat().st_size<20000:
+                  raise RuntimeError('Missing real native morph frame '+str(percentage))
+              print('REAL MORPH FRAME',percentage,state_shot.stat().st_size,flush=True)
+          import signal
+          subprocess.run(['xcrun','simctl','terminate',sid,
+                          'com.perspective2001.infini-canvas.native'],
+                         timeout=25,check=False)
+          movie=dest/'native-width-morph-state-animation.mp4'
+          recorder=subprocess.Popen(['xcrun','simctl','io',sid,'recordVideo',
+                                     '--force',str(movie)],
+                                    stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.PIPE, start_new_session=True)
+          try:
+              time.sleep(1)
+              cmd('xcrun','simctl','launch',sid,
+                  'com.perspective2001.infini-canvas.native',
+                  '--infini-visual-morph-animation', seconds=85)
+              time.sleep(4)
+          finally:
+              if recorder.poll() is None:
+                  os.killpg(recorder.pid,signal.SIGINT)
+              try: recorder.communicate(timeout=25)
+              except subprocess.TimeoutExpired:
+                  recorder.kill(); recorder.communicate()
+          if not movie.exists() or movie.stat().st_size<30000:
+              raise RuntimeError('Missing native morph state-animation recording')
+          (dest/'morph-capture-scope.txt').write_text(
+              'Native production SwiftUI ContentView + PencilKit host, debug-state driven.\\n'
+              'Frames: morph 25, 60, 100 percent; recording: expansion/collapse.\\n'
+              'Not a Siri-match claim. Not physical Apple Pencil input verification.\\n'
+              'Do not approve until actual frames and movie are opened and assessed.\\n')
+          print('REAL NATIVE MORPH VIDEO:',movie,movie.stat().st_size,flush=True)
           PY
       - name: Upload native iPad screenshot for visual inspection
         if: always()
