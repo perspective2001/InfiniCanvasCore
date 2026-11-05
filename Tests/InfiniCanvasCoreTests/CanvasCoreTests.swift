@@ -284,6 +284,83 @@ final class CanvasCoreTests: XCTestCase {
         window.isHidden = true
     }
 
+    func testRestSafeInsertedLinkCanBeTrashedAndRecoveredWithoutDeletingInk() throws {
+        let store = CanvasStore()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
+        let canvas = PKCanvasView(frame: window.bounds)
+        canvas.minimumZoomScale = 0.045
+        canvas.maximumZoomScale = 10
+        canvas.contentSize = CGSize(width: 12000, height: 12000)
+        window.addSubview(canvas)
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+        store.attach(canvas)
+        XCTAssertTrue(store.restSafe)
+
+        canvas.drawing = PKDrawing(strokes: [makeStroke(.pen, x: 180, y: 190)])
+        let original = canvas.drawing.dataRepresentation()
+        store.addTextNote("https://example.com/course/reading")
+        let note = try XCTUnwrap(store.activeTextNotes.last)
+        XCTAssertTrue(note.body.contains("https://"))
+
+        store.trashTextNote(note)
+        XCTAssertFalse(store.activeTextNotes.contains(where: { $0.id == note.id }))
+        XCTAssertTrue(store.discardedTextNotes.contains(where: { $0.id == note.id }))
+        XCTAssertEqual(canvas.drawing.dataRepresentation(), original,
+                       "Deleting an inserted link must not delete PencilKit ink")
+        let backupURL = try XCTUnwrap(store.exportCompleteBackup())
+        let backup = try JSONDecoder().decode(CompleteBackup.self,
+                                              from: Data(contentsOf: backupURL))
+        XCTAssertEqual(backup.index.textNotes?.first(where: { $0.id == note.id })?.isTrashed, true,
+                       "The soft-deleted note should survive backup/restart")
+        store.restoreTextNote(note)
+        XCTAssertTrue(store.activeTextNotes.contains(where: { $0.id == note.id }))
+        XCTAssertEqual(canvas.drawing.dataRepresentation(), original)
+        window.isHidden = true
+    }
+
+    func testFingerPanningRemainsAvailableAfterRestSafeAndOverlayToolSwitches() {
+        let store = CanvasStore()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
+        let canvas = PKCanvasView(frame: window.bounds)
+        canvas.minimumZoomScale = 0.045
+        canvas.maximumZoomScale = 10
+        canvas.contentSize = CGSize(width: 12000, height: 12000)
+        window.addSubview(canvas)
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+        store.attach(canvas)
+
+        XCTAssertTrue(canvas.isScrollEnabled)
+        XCTAssertFalse(canvas.isDirectionalLockEnabled)
+        XCTAssertTrue(canvas.panGestureRecognizer.isEnabled)
+        store.restSafe = false
+        store.restSafe = true
+        XCTAssertTrue(canvas.panGestureRecognizer.isEnabled)
+        XCTAssertFalse(canvas.isDirectionalLockEnabled)
+        store.tool = .capture
+        XCTAssertFalse(canvas.panGestureRecognizer.isEnabled,
+                       "Lasso overlay temporarily owns finger navigation")
+        store.tool = .marker
+        store.fixedHighlighter = true
+        XCTAssertFalse(canvas.panGestureRecognizer.isEnabled,
+                       "Fixed marker overlay temporarily owns finger navigation")
+        store.tool = .pen
+        XCTAssertTrue(canvas.panGestureRecognizer.isEnabled,
+                      "Switching back to normal pen restores native finger navigation")
+
+        for overlay in [LassoTouchView(frame: window.bounds),
+                        FixedNibTouchView(frame: window.bounds)] as [UIView] {
+            let pan = try? XCTUnwrap(overlay.gestureRecognizers?.compactMap {
+                $0 as? UIPanGestureRecognizer
+            }.first)
+            XCTAssertEqual(pan?.minimumNumberOfTouches, 1)
+            XCTAssertEqual(pan?.maximumNumberOfTouches, 2,
+                           "Two fingers must not cancel navigation over full-screen overlays")
+        }
+        window.isHidden = true
+    }
+
     func testPencilOnlyCanvasOneFingerScrollAndNativeZoomLimit() {
         let store = CanvasStore()
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
