@@ -73,7 +73,7 @@ jobs:
       # simulator by running actual PencilKit tests. Use THAT simulator for
       # compositor screenshots; the custom Xcode27 host runner stalled on boot.
       - name: Build actual native host and capture real iPad screen (same tested SDK)
-        timeout-minutes: 7
+        timeout-minutes: 11
         shell: bash
         run: |
           set -euo pipefail
@@ -96,12 +96,31 @@ jobs:
                    if 'iPad' in d['name'] and d.get('isAvailable',True)]
           if not options: raise RuntimeError('No iPad Simulator on tested iOS26 runner')
           sim=next((d for d in options if d['state']=='Booted'),options[0])
+          (dest/'visual-review-info.txt').write_text(
+              'Source SHA: '+os.environ['GITHUB_SHA']+'\\n'
+              'Capture: PENDING; native app must launch before review\\n'
+              'Motion: NOT CAPTURED\\n')
           sid=sim['udid']
           def cmd(*args,seconds=55):
               print('VISUAL-CAPTURE:',*args,flush=True)
               return subprocess.run(args,timeout=seconds,check=True)
           if sim['state']!='Booted': cmd('xcrun','simctl','boot',sid,seconds=50)
-          cmd('xcrun','simctl','bootstatus',sid,'-b',seconds=55)
+          # Boot occasionally takes >55s on GitHub macOS runners after XCTest.
+          # A simulator startup timeout is infrastructure failure, not a Swift
+          # compilation or visual-acceptance failure. Preserve the diagnostic
+          # manifest, then fail openly rather than silently accepting no image.
+          try:
+              cmd('xcrun','simctl','bootstatus',sid,'-b',seconds=150)
+          except (subprocess.TimeoutExpired, subprocess.CalledProcessError):
+              diagnostic = subprocess.run(
+                  ['xcrun','simctl','list','devices','available'],
+                  capture_output=True, text=True, timeout=20)
+              (dest/'simulator-startup-failure.txt').write_text(
+                  'Simulator: '+sim['name']+' ['+sid+']\\n'
+                  'Runner: '+os.environ.get('RUNNER_NAME','unknown')+'\\n'
+                  'Devices: '+diagnostic.stdout+'\\n'+diagnostic.stderr)
+              print('::error::iPad Simulator failed to boot; capture NOT verified',flush=True)
+              raise
           cmd('xcrun','simctl','install',sid,os.environ['APP'],seconds=45)
           cmd('xcrun','simctl','launch',sid,'com.perspective2001.infini-canvas.native',seconds=35)
           time.sleep(5)
